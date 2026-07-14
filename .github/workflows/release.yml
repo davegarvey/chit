@@ -1,50 +1,26 @@
-name: Version & Release
+name: Release
 
 on:
-  push:
+  pull_request:
+    types: [closed]
     branches: [main]
   workflow_dispatch:
-    inputs:
-      skip_version_bump:
-        description: 'Skip version bumping for testing'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-        - 'true'
-        - 'false'
 
 concurrency:
   group: version-release
   cancel-in-progress: false
 
 jobs:
-  wait-for-ci:
+  release:
+    if: github.event.pull_request.merged == true || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    if: github.event_name != 'workflow_dispatch'
-    steps:
-      - name: Wait for CI
-        uses: lewagon/wait-on-check-action@v1.3.4
-        with:
-          ref: ${{ github.sha }}
-          check-name: 'test'
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          wait-interval: 10
-
-  version:
-    name: Version
-    runs-on: ubuntu-latest
-    needs: [wait-for-ci]
-    if: always() && (needs.wait-for-ci.result == 'success' || github.event_name == 'workflow_dispatch')
-    outputs:
-      version_changed: ${{ steps.release.outputs.released }}
-      new_version: ${{ steps.release.outputs.version }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
-      pr_number: ${{ steps.detect.outputs.pr_number }}
     permissions:
       contents: write
       pull-requests: write
-      checks: write
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
+      did_bump: ${{ steps.bump.outputs.did_bump }}
     steps:
     - uses: actions/checkout@v4
       with:
@@ -57,158 +33,47 @@ jobs:
         toolchain: stable
         cache: true
 
-    - name: Build grubble
-      run: |
-        cargo install grubble
+    - name: Install grubble
+      run: cargo install grubble
 
-    - name: Clean up stale tags
+    - name: Clean stale tags
       run: |
         git fetch origin --tags
         git tag -l 'v*' | while read -r tag; do
           if ! git merge-base --is-ancestor "$tag" HEAD 2>/dev/null; then
-            echo "Removing unreachable tag: $tag"
             git tag -d "$tag"
           fi
         done
 
-    - name: Check bump needed
+    - name: Bump version and create tag
       id: bump
-      if: github.event_name != 'workflow_dispatch' || github.event.inputs.skip_version_bump != 'true'
-      run: |
-        VERSION_BEFORE=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
-        VERSION_AFTER=$(grubble --preset rust --raw --dry-run)
-        if [ -z "$VERSION_AFTER" ]; then
-          VERSION_AFTER="$VERSION_BEFORE"
-        fi
-        if [ "$VERSION_AFTER" != "$VERSION_BEFORE" ]; then
-          echo "changed=true" >> $GITHUB_OUTPUT
-          echo "version=$VERSION_AFTER" >> $GITHUB_OUTPUT
-        else
-          echo "changed=false" >> $GITHUB_OUTPUT
-        fi
-
-    - name: Detect merged release PR
-      id: detect
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        PR_INFO=$(gh pr list \
-          --state merged \
-          --base main \
-          --limit 20 \
-          --json number,headRefName,mergeCommit,mergedAt \
-          | jq -r '[.[] | select(.headRefName | test("^release/v[0-9]+\\.[0-9]+\\.[0-9]+$"))] | sort_by(.mergedAt) | last // empty')
-        if [ -n "$PR_INFO" ] && [ "$PR_INFO" != "null" ]; then
-          echo "merged=true" >> $GITHUB_OUTPUT
-          echo "pr_number=$(echo $PR_INFO | jq -r '.number')" >> $GITHUB_OUTPUT
-          echo "merge_sha=$(echo $PR_INFO | jq -r '.mergeCommit.oid')" >> $GITHUB_OUTPUT
-        else
-          echo "merged=false" >> $GITHUB_OUTPUT
-        fi
-
-    - name: Release merged PR
-      id: release
-      if: steps.detect.outputs.merged == 'true'
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        PR_NUMBER="${{ steps.detect.outputs.pr_number }}"
-        RELEASE_JSON=$(grubble --release-from-pr "${PR_NUMBER}" --output json)
-        echo "$RELEASE_JSON" | jq .
-
-        VERSION=$(echo "$RELEASE_JSON" | jq -r '.version')
-        TAG_NAME=$(echo "$RELEASE_JSON" | jq -r '.tag_name')
-        MAJOR_TAG=$(echo "$RELEASE_JSON" | jq -r '.major_tag_name')
-        MERGE_SHA=$(echo "$RELEASE_JSON" | jq -r '.merge_commit_sha')
-        BODY=$(echo "$RELEASE_JSON" | jq -r '.body')
-
-        if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
-          echo "::error::Failed to resolve release for PR #${PR_NUMBER}"
-          exit 1
-        fi
-
-        RELEASED=false
-        if gh api "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG_NAME}" >/dev/null 2>&1; then
-          echo "Tag ${TAG_NAME} already exists"
-        else
-          echo "Creating tag ${TAG_NAME} on ${MERGE_SHA}"
-          gh api -X POST -H "Accept: application/vnd.github+json" \
-            "repos/${GITHUB_REPOSITORY}/git/refs" \
-            -f "ref=refs/tags/${TAG_NAME}" \
-            -f "sha=${MERGE_SHA}"
-          RELEASED=true
-        fi
-
-        if gh api "repos/${GITHUB_REPOSITORY}/git/refs/tags/${MAJOR_TAG}" >/dev/null 2>&1; then
-          gh api -X PATCH -H "Accept: application/vnd.github+json" \
-            "repos/${GITHUB_REPOSITORY}/git/refs/tags/${MAJOR_TAG}" \
-            -f "sha=${MERGE_SHA}" -F "force=true" >/dev/null
-        else
-          gh api -X POST -H "Accept: application/vnd.github+json" \
-            "repos/${GITHUB_REPOSITORY}/git/refs" \
-            -f "ref=refs/tags/${MAJOR_TAG}" \
-            -f "sha=${MERGE_SHA}"
-        fi
-
-        if ! gh release view "${TAG_NAME}" >/dev/null 2>&1; then
-          echo "Creating GitHub release for ${TAG_NAME}"
-          gh release create "${TAG_NAME}" \
-            --target "${MERGE_SHA}" \
-            --title "v${VERSION}" \
-            --notes "${BODY}" \
-            --verify-tag
-          RELEASED=true
-        fi
-
-        echo "released=$RELEASED" >> $GITHUB_OUTPUT
-        echo "version=${VERSION}" >> $GITHUB_OUTPUT
-        echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
-
-    - name: Open release PR
-      if: steps.bump.outputs.changed == 'true'
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        VERSION="${{ steps.bump.outputs.version }}"
-        BRANCH="release/v${VERSION}"
-
-        git fetch origin --tags --force
-        git checkout -B "${BRANCH}"
-
+        BEFORE=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
         grubble \
           --git-user-name "github-actions[bot]" \
           --git-user-email "41898282+github-actions[bot]@users.noreply.github.com" \
-          --git-branch "${BRANCH}" \
           --preset rust \
           --changelog \
           --push \
-          --force-push
+          --tag \
+          --update-major-tag
 
-        PUSHED_SHA=$(git rev-parse "${BRANCH}")
-        gh api "repos/${GITHUB_REPOSITORY}/check-runs" \
-          --method POST \
-          -f "name=test" \
-          -f "head_sha=${PUSHED_SHA}" \
-          -f "status=completed" \
-          -f "conclusion=success" \
-          -f "output[title]=Release branch check" \
-          -f "output[summary]=Content validated by CI on main"
-
-        CHANGELOG_BODY=$(grubble --changelog-entry || echo "")
-        if gh pr view "${BRANCH}" >/dev/null 2>&1; then
-          gh pr edit "${BRANCH}" --body "${CHANGELOG_BODY}"
+        AFTER=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
+        if [ "$AFTER" != "$BEFORE" ]; then
+          echo "did_bump=true" >> $GITHUB_OUTPUT
+          echo "version=$AFTER" >> $GITHUB_OUTPUT
+          echo "tag=v$AFTER" >> $GITHUB_OUTPUT
         else
-          gh pr create \
-            --base main \
-            --head "${BRANCH}" \
-            --title "Release v${VERSION}" \
-            --body "${CHANGELOG_BODY}"
+          echo "did_bump=false" >> $GITHUB_OUTPUT
+          echo "version=$AFTER" >> $GITHUB_OUTPUT
         fi
 
-  build-release:
-    name: Build Release
-    needs: [version]
-    if: needs.version.outputs.version_changed == 'true'
+  build:
+    name: Build binaries
+    needs: release
+    if: needs.release.outputs.did_bump == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -235,8 +100,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          ref: ${{ needs.version.outputs.tag_name }}
+          ref: ${{ needs.release.outputs.tag }}
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -276,7 +140,7 @@ jobs:
         if: matrix.os != 'windows-latest'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.version.outputs.tag_name }}
+          tag_name: ${{ needs.release.outputs.tag }}
           files: |
             ${{ matrix.name }}.tar.gz
             ${{ matrix.name }}.tar.gz.sha256
@@ -287,24 +151,24 @@ jobs:
         if: matrix.os == 'windows-latest'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.version.outputs.tag_name }}
+          tag_name: ${{ needs.release.outputs.tag }}
           files: |
             ${{ matrix.name }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  publish-crate:
+  publish:
     name: Publish to crates.io
+    needs: [release, build]
+    if: needs.release.outputs.did_bump == 'true'
     runs-on: ubuntu-latest
-    needs: [build-release]
     permissions:
       id-token: write
       contents: read
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          ref: ${{ needs.version.outputs.tag_name }}
+          ref: ${{ needs.release.outputs.tag }}
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
