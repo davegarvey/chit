@@ -417,34 +417,28 @@ async fn cmd_status() -> anyhow::Result<()> {
 }
 
 async fn cmd_stop() -> anyhow::Result<()> {
-    match store::read_daemon_json().await {
-        Ok(info) => {
-            #[cfg(unix)]
-            {
-                use std::process::Command;
-                Command::new("kill")
-                    .arg(info.pid.to_string())
-                    .status()
-                    .context("failed to send SIGTERM")?;
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = info;
-                bail!("stop is not supported on this platform");
-            }
+    #[cfg(not(unix))]
+    {
+        let _ = store::read_daemon_json().await;
+        bail!("stop is not supported on this platform");
+    }
 
-            for _ in 0..20 {
-                if store::read_daemon_json().await.is_err() {
-                    println!("daemon stopped");
-                    return Ok(());
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
+    #[cfg(unix)]
+    {
+        let info = store::read_daemon_json().await?;
+        use std::process::Command;
+        Command::new("kill")
+            .arg(info.pid.to_string())
+            .status()
+            .context("failed to send SIGTERM")?;
+
+        for _ in 0..20 {
+            if store::read_daemon_json().await.is_err() {
+                println!("daemon stopped");
+                return Ok(());
             }
-            bail!("daemon did not stop in time");
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        Err(_) => {
-            println!("no daemon running");
-            Ok(())
-        }
+        bail!("daemon did not stop in time");
     }
 }
