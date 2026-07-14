@@ -40,7 +40,7 @@ chit start
 |---|---|
 | `chit init` | Create `./.chit/config.json` with project identity |
 | `chit start [message]` | Start daemon + new session (optionally with first message) |
-| `chit send [session] <message>` | Send a message (blocks for reply). `--ff` to fire-and-forget |
+| `chit chat [session] <message>` | Send a message (blocks for reply). `--ff` to fire-and-forget |
 | `chit wait [session]` | Block until next message arrives. `--timeout <s>` |
 | `chit recap [session]` | Full conversation transcript |
 | `chit list` | List active sessions |

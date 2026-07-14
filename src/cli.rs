@@ -31,7 +31,8 @@ pub enum Commands {
         message: Option<String>,
     },
     /// Send a message to a session (blocks for reply by default)
-    Send {
+    #[command(alias = "send")]
+    Chat {
         /// Message content (markdown)
         message: String,
         /// Session ID (auto-targets if single session exists)
@@ -77,7 +78,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         Commands::Init { name, opencode } => cmd_init(name, opencode).await,
         Commands::Start { message } => cmd_start(message).await,
-        Commands::Send {
+        Commands::Chat {
             message,
             session,
             ff,
@@ -178,7 +179,7 @@ You have access to `chit`, a CLI tool for communicating with agents in other ses
 ## Commands
 
 - `chit start [message]` — Start a new session (optionally with initial message). Outputs a session ID like `sess_abc12`.
-- `chit send [session] <message>` — Send a message in markdown format. Blocks for a reply by default. Use `--ff` to fire-and-forget.
+- `chit chat [session] <message>` — Send a message in markdown format. Blocks for a reply by default. Use `--ff` to fire-and-forget.
 - `chit wait [session]` — Block until a new message arrives. Use `--timeout <secs>` to set a timeout.
 - `chit recap [session]` — View the full conversation transcript.
 - `chit close [session]` — Close a session.
@@ -187,7 +188,7 @@ You have access to `chit`, a CLI tool for communicating with agents in other ses
 
 - Format messages in **markdown** — use code blocks with language tags, file references as `path/file:line`, and links where useful.
 - Include relevant context: error messages, file paths, stack traces, code snippets.
-- Use `chit send` when you need to ask something or provide information to another agent.
+- Use `chit chat` when you need to ask something or provide information to another agent.
 - Use `chit wait` when you're expecting a response.
 "#;
         tokio::fs::write(&skill_path, skill).await?;
