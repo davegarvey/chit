@@ -9,13 +9,18 @@ fn chit(home: &std::path::Path, args: &[&str]) -> (String, String, bool) {
     chit_in(home, None, args)
 }
 
-fn chit_in(home: &std::path::Path, dir: Option<&std::path::Path>, args: &[&str]) -> (String, String, bool) {
+fn chit_in(
+    home: &std::path::Path,
+    dir: Option<&std::path::Path>,
+    args: &[&str],
+) -> (String, String, bool) {
     let mut cmd = Command::new(chit_bin());
     cmd.env("HOME", home).args(args);
     if let Some(d) = dir {
         cmd.current_dir(d);
     }
-    let output = cmd.output()
+    let output = cmd
+        .output()
         .unwrap_or_else(|e| panic!("failed to run chit {}: {}", args.join(" "), e));
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -25,7 +30,13 @@ fn chit_in(home: &std::path::Path, dir: Option<&std::path::Path>, args: &[&str])
 
 fn chit_ok(home: &std::path::Path, args: &[&str]) -> String {
     let (stdout, stderr, ok) = chit(home, args);
-    assert!(ok, "chit {} failed\nstdout: {}\nstderr: {}", args.join(" "), stdout, stderr);
+    assert!(
+        ok,
+        "chit {} failed\nstdout: {}\nstderr: {}",
+        args.join(" "),
+        stdout,
+        stderr
+    );
     stdout
 }
 
@@ -43,10 +54,17 @@ fn test_daemon_lifecycle() {
     let home = tempfile::tempdir().unwrap();
 
     let session = chit_start(home.path());
-    assert!(session.starts_with("sess_"), "session should start with sess_");
+    assert!(
+        session.starts_with("sess_"),
+        "session should start with sess_"
+    );
 
     let status = chit_ok(home.path(), &["status"]);
-    assert!(status.contains("daemon running"), "status should show daemon: {}", status);
+    assert!(
+        status.contains("daemon running"),
+        "status should show daemon: {}",
+        status
+    );
     assert!(status.contains("PID:"), "status should show PID");
 
     let list = chit_ok(home.path(), &["list"]);
@@ -55,7 +73,10 @@ fn test_daemon_lifecycle() {
     chit_stop(home.path());
 
     let status = chit_ok(home.path(), &["status"]);
-    assert!(status.contains("no daemon"), "status should show no daemon after stop");
+    assert!(
+        status.contains("no daemon"),
+        "status should show no daemon after stop"
+    );
 }
 
 #[test]
@@ -64,10 +85,16 @@ fn test_send_and_recap() {
 
     let session = chit_start(home.path());
 
-    chit_ok(home.path(), &["send", "--session", &session, "--ff", "Hello from **test**"]);
+    chit_ok(
+        home.path(),
+        &["send", "--session", &session, "--ff", "Hello from **test**"],
+    );
 
     let recap = chit_ok(home.path(), &["recap", &session]);
-    assert!(recap.contains("Hello from **test**"), "recap should contain message");
+    assert!(
+        recap.contains("Hello from **test**"),
+        "recap should contain message"
+    );
     assert!(recap.contains(&session), "recap should show session ID");
 
     chit_stop(home.path());
@@ -82,7 +109,10 @@ fn test_auto_target_single_session() {
     chit_ok(home.path(), &["send", "--ff", "auto-target test"]);
 
     let recap = chit_ok(home.path(), &["recap"]);
-    assert!(recap.contains("auto-target test"), "recap should contain message via auto-target");
+    assert!(
+        recap.contains("auto-target test"),
+        "recap should contain message via auto-target"
+    );
 
     chit_stop(home.path());
 }
@@ -96,14 +126,24 @@ fn test_multiple_sessions_auto_target_error() {
 
     let (_stdout, stderr, ok) = chit(home.path(), &["send", "--ff", "test"]);
     assert!(!ok, "send should fail with multiple sessions");
-    assert!(stderr.contains("Multiple active sessions"), "error should list multiple sessions: {}", stderr);
+    assert!(
+        stderr.contains("Multiple active sessions"),
+        "error should list multiple sessions: {}",
+        stderr
+    );
 
     chit_stop(home.path());
 }
 
 fn run_init_in(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) {
     let (stdout, stderr, ok) = chit_in(home, Some(dir), args);
-    assert!(ok, "chit {} failed\nstdout: {}\nstderr: {}", args.join(" "), stdout, stderr);
+    assert!(
+        ok,
+        "chit {} failed\nstdout: {}\nstderr: {}",
+        args.join(" "),
+        stdout,
+        stderr
+    );
 }
 
 #[test]
@@ -114,7 +154,11 @@ fn test_init_command() {
     run_init_in(project.path(), home.path(), &["init"]);
 
     let config_path = project.path().join(".chit").join("config.json");
-    assert!(config_path.exists(), "init should create .chit/config.json: {:?}", config_path);
+    assert!(
+        config_path.exists(),
+        "init should create .chit/config.json: {:?}",
+        config_path
+    );
 
     let config = std::fs::read_to_string(&config_path).unwrap();
     assert!(config.contains("name"), "config should contain name field");
@@ -125,11 +169,18 @@ fn test_init_with_custom_name() {
     let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
 
-    run_init_in(project.path(), home.path(), &["init", "--name", "my-custom-project"]);
+    run_init_in(
+        project.path(),
+        home.path(),
+        &["init", "--name", "my-custom-project"],
+    );
 
     let config_path = project.path().join(".chit").join("config.json");
     let config = std::fs::read_to_string(&config_path).unwrap();
-    assert!(config.contains("my-custom-project"), "config should contain custom name");
+    assert!(
+        config.contains("my-custom-project"),
+        "config should contain custom name"
+    );
 }
 
 #[test]
@@ -140,7 +191,10 @@ fn test_init_opencode_skill() {
     run_init_in(project.path(), home.path(), &["init", "--opencode"]);
 
     let skill_path = project.path().join(".chit").join("opencode-skill.md");
-    assert!(skill_path.exists(), "init --opencode should create skill file");
+    assert!(
+        skill_path.exists(),
+        "init --opencode should create skill file"
+    );
 
     let skill = std::fs::read_to_string(&skill_path).unwrap();
     assert!(skill.contains("chit"), "skill should reference chit");
@@ -156,7 +210,10 @@ fn test_close_session() {
     assert!(close.contains("closed"), "close should confirm: {}", close);
 
     let list = chit_ok(home.path(), &["list"]);
-    assert!(list.contains("closed"), "list should show session as closed");
+    assert!(
+        list.contains("closed"),
+        "list should show session as closed"
+    );
 
     chit_stop(home.path());
 }
@@ -167,14 +224,43 @@ fn test_agent_to_agent_conversation() {
 
     let session = chit_start(home.path());
 
-    chit_ok(home.path(), &["send", "--session", &session, "--ff", "Bug in grubble: fix scope commits"]);
+    chit_ok(
+        home.path(),
+        &[
+            "send",
+            "--session",
+            &session,
+            "--ff",
+            "Bug in grubble: fix scope commits",
+        ],
+    );
 
-    chit_ok(home.path(), &["send", "--session", &session, "--ff", "--as", "grubble-agent", "Found it, fix pushed"]);
+    chit_ok(
+        home.path(),
+        &[
+            "send",
+            "--session",
+            &session,
+            "--ff",
+            "--as",
+            "grubble-agent",
+            "Found it, fix pushed",
+        ],
+    );
 
     let recap = chit_ok(home.path(), &["recap", &session]);
-    assert!(recap.contains("Bug in grubble"), "recap should have first message");
-    assert!(recap.contains("Found it"), "recap should have second message");
-    assert!(recap.contains("grubble-agent"), "recap should attribute --as name");
+    assert!(
+        recap.contains("Bug in grubble"),
+        "recap should have first message"
+    );
+    assert!(
+        recap.contains("Found it"),
+        "recap should have second message"
+    );
+    assert!(
+        recap.contains("grubble-agent"),
+        "recap should attribute --as name"
+    );
 
     chit_stop(home.path());
 }
@@ -185,7 +271,10 @@ fn test_chit_start_with_message() {
 
     let sess = chit_start(home.path());
 
-    chit_ok(home.path(), &["send", "--session", &sess, "--ff", "Starting message test"]);
+    chit_ok(
+        home.path(),
+        &["send", "--session", &sess, "--ff", "Starting message test"],
+    );
 
     let recap = chit_ok(home.path(), &["recap", &sess]);
     assert!(recap.contains("Starting message test"));
@@ -201,7 +290,11 @@ fn test_wait_timeout() {
 
     let (stdout, _stderr, ok) = chit(home.path(), &["wait", &sess, "--timeout", "2"]);
     assert!(ok, "wait timeout should succeed");
-    assert!(stdout.contains("timeout"), "wait should report timeout: {}", stdout);
+    assert!(
+        stdout.contains("timeout"),
+        "wait should report timeout: {}",
+        stdout
+    );
 
     chit_stop(home.path());
 }

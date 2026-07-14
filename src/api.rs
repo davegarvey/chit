@@ -26,13 +26,14 @@ pub fn create_router(store: Arc<Store>) -> Router {
     Router::new()
         .route("/api/sessions", post(create_session).get(list_sessions))
         .route("/api/sessions/:id", get(get_session).delete(close_session))
-        .route("/api/sessions/:id/messages", post(send_message).get(get_messages))
+        .route(
+            "/api/sessions/:id/messages",
+            post(send_message).get(get_messages),
+        )
         .route("/api/sessions/:id/wait", get(wait_for_message))
         .route("/api/sessions/:id/recap", get(recap_session))
         .route("/api/status", get(status))
-        .layer(
-            tower_http::cors::CorsLayer::permissive(),
-        )
+        .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state)
 }
 
@@ -46,19 +47,17 @@ async fn create_session(
     (StatusCode::CREATED, Json(CreateSessionResponse { id }))
 }
 
-async fn list_sessions(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn list_sessions(State(state): State<AppState>) -> impl IntoResponse {
     let sessions = state.store.list_sessions().await;
     (StatusCode::OK, Json(sessions))
 }
 
-async fn get_session(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn get_session(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     match state.store.get_session(&id).await {
-        Some(session) => (StatusCode::OK, Json(serde_json::to_value(session).unwrap()).into_response()),
+        Some(session) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(session).unwrap()).into_response(),
+        ),
         None => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -69,12 +68,13 @@ async fn get_session(
     }
 }
 
-async fn close_session(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn close_session(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     if state.store.close_session(&id).await {
-        (StatusCode::OK, Json(serde_json::json!({"status": "closed"}))).into_response()
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({"status": "closed"})),
+        )
+            .into_response()
     } else {
         (
             StatusCode::NOT_FOUND,
@@ -91,14 +91,21 @@ async fn send_message(
     Path(id): Path<String>,
     Json(req): Json<SendMessageRequest>,
 ) -> impl IntoResponse {
-    match state.store.add_message(&id, &req.sender, &req.content).await {
-        Some(msg) => (StatusCode::CREATED, Json(SendMessageResponse {
-            id: msg.id,
-            session_id: msg.session_id,
-            sender: msg.sender,
-            content: msg.content,
-            timestamp: msg.timestamp,
-        }))
+    match state
+        .store
+        .add_message(&id, &req.sender, &req.content)
+        .await
+    {
+        Some(msg) => (
+            StatusCode::CREATED,
+            Json(SendMessageResponse {
+                id: msg.id,
+                session_id: msg.session_id,
+                sender: msg.sender,
+                content: msg.content,
+                timestamp: msg.timestamp,
+            }),
+        )
             .into_response(),
         None => {
             let session = state.store.get_session(&id).await;
@@ -255,10 +262,7 @@ async fn wait_for_message(
     }
 }
 
-async fn recap_session(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn recap_session(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     let session = state.store.get_session(&id).await;
     match session {
         Some(session) => {
@@ -275,9 +279,7 @@ async fn recap_session(
     }
 }
 
-async fn status(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn status(State(state): State<AppState>) -> impl IntoResponse {
     let sessions = state.store.list_sessions().await;
     let started_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

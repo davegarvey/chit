@@ -77,9 +77,12 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         Commands::Init { name, opencode } => cmd_init(name, opencode).await,
         Commands::Start { message } => cmd_start(message).await,
-        Commands::Send { message, session, ff, sender_name } => {
-            cmd_send(session, &message, ff, sender_name.as_deref()).await
-        }
+        Commands::Send {
+            message,
+            session,
+            ff,
+            sender_name,
+        } => cmd_send(session, &message, ff, sender_name.as_deref()).await,
         Commands::Wait { session, timeout } => cmd_wait(session, timeout).await,
         Commands::Recap { session } => cmd_recap(session).await,
         Commands::List => cmd_list().await,
@@ -213,11 +216,7 @@ async fn cmd_start(message: Option<String>) -> anyhow::Result<()> {
         }
     };
 
-    let resp = client
-        .post(&url)
-        .json(&req_body)
-        .send()
-        .await?;
+    let resp = client.post(&url).json(&req_body).send().await?;
 
     let session: CreateSessionResponse = resp.json().await?;
     println!("{}", session.id);
@@ -240,7 +239,11 @@ async fn cmd_send(
 
     let sender = store::get_sender_name(sender_override);
     let client = reqwest::Client::new();
-    let url = daemon_url(&host, port, &format!("/api/sessions/{}/messages", session_id));
+    let url = daemon_url(
+        &host,
+        port,
+        &format!("/api/sessions/{}/messages", session_id),
+    );
 
     let req = SendMessageRequest {
         sender,
@@ -271,7 +274,10 @@ async fn cmd_send(
     if result.closed {
         println!("[session closed]");
     } else if result.timeout {
-        println!("[timeout after {}s, no reply]", result.timeout_after.unwrap_or(0));
+        println!(
+            "[timeout after {}s, no reply]",
+            result.timeout_after.unwrap_or(0)
+        );
     } else {
         for m in &result.messages {
             println!("{}: {}", m.sender, m.content);
@@ -293,7 +299,10 @@ async fn cmd_wait(session_arg: Option<String>, timeout_secs: Option<u64>) -> any
     let url = daemon_url(
         &host,
         port,
-        &format!("/api/sessions/{}/wait?since=0&timeout_secs={}", session_id, wait_timeout),
+        &format!(
+            "/api/sessions/{}/wait?since=0&timeout_secs={}",
+            session_id, wait_timeout
+        ),
     );
 
     let resp = client.get(&url).send().await?;
@@ -302,10 +311,19 @@ async fn cmd_wait(session_arg: Option<String>, timeout_secs: Option<u64>) -> any
     if result.closed {
         println!("[session closed]");
     } else if result.timeout {
-        println!("timeout after {}s, no new messages", result.timeout_after.unwrap_or(0));
+        println!(
+            "timeout after {}s, no new messages",
+            result.timeout_after.unwrap_or(0)
+        );
     } else {
         for msg in &result.messages {
-            println!("[{}] {} ({}):\n    {}", msg.id, msg.sender, msg.timestamp.format("%H:%M:%S"), msg.content);
+            println!(
+                "[{}] {} ({}):\n    {}",
+                msg.id,
+                msg.sender,
+                msg.timestamp.format("%H:%M:%S"),
+                msg.content
+            );
         }
     }
 

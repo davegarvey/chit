@@ -120,11 +120,7 @@ impl Store {
         Some(msg)
     }
 
-    pub async fn get_messages_since(
-        &self,
-        session_id: &str,
-        since: u64,
-    ) -> Vec<Message> {
+    pub async fn get_messages_since(&self, session_id: &str, since: u64) -> Vec<Message> {
         let msgs = self.messages.read().await;
         msgs.get(session_id)
             .map(|v| v.iter().filter(|m| m.id > since).cloned().collect())
@@ -174,10 +170,7 @@ impl Store {
         sessions.values().any(|s| !s.closed)
     }
 
-    pub async fn subscribe(
-        &self,
-        session_id: &str,
-    ) -> Option<broadcast::Receiver<DaemonEvent>> {
+    pub async fn subscribe(&self, session_id: &str) -> Option<broadcast::Receiver<DaemonEvent>> {
         self.broadcast
             .read()
             .await
@@ -248,8 +241,7 @@ pub fn get_sender_name(override_name: Option<&str>) -> String {
         .ok()
         .and_then(|_| {
             tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current()
-                    .block_on(read_project_config())
+                tokio::runtime::Handle::current().block_on(read_project_config())
             })
         })
         .unwrap_or_else(get_default_sender)
@@ -278,7 +270,10 @@ mod tests {
     async fn test_store_create_session() {
         let store = Store::new();
         let id = store.create_session(None).await;
-        assert!(id.starts_with("sess_"), "session ID should start with sess_");
+        assert!(
+            id.starts_with("sess_"),
+            "session ID should start with sess_"
+        );
 
         let session = store.get_session(&id).await;
         assert!(session.is_some());
@@ -354,7 +349,9 @@ mod tests {
     #[tokio::test]
     async fn test_store_create_with_initial_message() {
         let store = Store::new();
-        let id = store.create_session(Some(("init-agent".into(), "initial message".into()))).await;
+        let id = store
+            .create_session(Some(("init-agent".into(), "initial message".into())))
+            .await;
 
         let messages = store.get_all_messages(&id).await;
         assert_eq!(messages.len(), 1);
