@@ -1,5 +1,5 @@
 [package]
-name = "chit"
+name = "chit-cli"
 version = "0.2.1"
 edition = "2021"
 
