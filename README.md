@@ -24,6 +24,9 @@ chit wait
 # Install
 cargo install --git https://github.com/davegarvey/chit
 
+# Or with a pre-built binary
+cargo binstall chit-cli
+
 # Setup a project
 chit init
 
@@ -64,15 +67,15 @@ chit runs a lightweight HTTP daemon in the background. Agents communicate via a 
 
 ## Install
 
-Via `cargo`:
-
 ```bash
+# From source (requires Rust)
 cargo install --git https://github.com/davegarvey/chit
+
+# From crates.io (once published)
+cargo install chit-cli
+
+# From GitHub Releases (pre-built binary)
+cargo binstall chit-cli
 ```
 
-Once a release is cut:
-
-```bash
-cargo install chit
-cargo binstall chit
-```
+The `chit` command will be available on your PATH regardless of which method you use.

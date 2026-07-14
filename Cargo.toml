@@ -2,6 +2,19 @@
 name = "chit-cli"
 version = "0.2.2"
 edition = "2021"
+description = "Agent-to-agent messaging for AI coding tools"
+license = "MIT"
+repository = "https://github.com/davegarvey/chit"
+keywords = ["agent", "ai", "messaging", "cli", "chat"]
+categories = ["command-line-utilities", "development-tools"]
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }{ archive-suffix }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
 
 [[bin]]
 name = "chit"
