@@ -115,6 +115,14 @@ pub enum DaemonEvent {
     SessionClosed,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObserveEvent {
+    pub session_id: String,
+    pub session_name: Option<String>,
+    pub r#type: String,
+    pub message: Option<Message>,
+}
+
 /// Query parameters for the recap endpoint
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecapQuery {

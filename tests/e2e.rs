@@ -735,28 +735,29 @@ fn test_send_file_flag() {
 #[test]
 fn test_use_set_and_clear() {
     let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
     let sess = chit_start(home.path());
 
-    // Set active session
-    let out = chit_ok(home.path(), &["use", &sess]);
+    // Set active session (in project dir so active-session is isolated)
+    let out = chit_in(home.path(), Some(project.path()), &["use", &sess]).0;
     assert!(out.contains("Active session set"), "should confirm: {}", out);
 
     // Show active session
-    let out = chit_ok(home.path(), &["use"]);
+    let out = chit_in(home.path(), Some(project.path()), &["use"]).0;
     assert!(out.contains(&sess), "should show session: {}", out);
 
     // Send without --session should use active session
-    chit_ok(home.path(), &["send", "--no-wait", "sent via active session"]);
+    chit_in(home.path(), Some(project.path()), &["send", "--no-wait", "sent via active session"]).2.then(|| ()).unwrap();
 
     let recap = chit_ok(home.path(), &["recap", &sess]);
     assert!(recap.contains("active session"), "message should be in session");
 
     // Clear
-    let out = chit_ok(home.path(), &["use", "--clear"]);
+    let out = chit_in(home.path(), Some(project.path()), &["use", "--clear"]).0;
     assert!(out.contains("cleared"), "should confirm clear: {}", out);
 
     // Verify cleared
-    let (stdout, _stderr, ok) = chit(home.path(), &["use"]);
+    let (stdout, _stderr, ok) = chit_in(home.path(), Some(project.path()), &["use"]);
     assert!(ok);
     assert!(!stdout.contains(&sess), "should not show session after clear");
 
@@ -766,17 +767,146 @@ fn test_use_set_and_clear() {
 #[test]
 fn test_use_json_output() {
     let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
     let sess = chit_start(home.path());
 
-    let out = chit_ok(home.path(), &["use", &sess, "--json"]);
+    let out = chit_in(home.path(), Some(project.path()), &["use", &sess, "--json"]).0;
     assert!(out.contains("\"session_id\""), "json should have session_id: {}", out);
     assert!(out.contains(&sess), "json should contain session id");
 
-    let out = chit_ok(home.path(), &["use", "--json"]);
+    let out = chit_in(home.path(), Some(project.path()), &["use", "--json"]).0;
     assert!(out.contains("\"session_id\""), "json show should have session_id");
 
-    let out = chit_ok(home.path(), &["use", "--clear", "--json"]);
+    let out = chit_in(home.path(), Some(project.path()), &["use", "--clear", "--json"]).0;
     assert!(out.contains("\"status\""), "json clear should have status");
+
+    chit_stop(home.path());
+}
+
+#[test]
+fn test_observe_streams_all_sessions() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let sess1 = chit_start(home.path());
+    let sess2 = chit_start(home.path());
+
+    let mut child = std::process::Command::new(chit_bin())
+        .env("HOME", home.path())
+        .args(&["observe", "--since", "0", "--json"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to start observe");
+
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    chit_ok(home.path(), &["send", "--session", &sess1, "--no-wait", "--as", "alpha", "observe-msg-1"]);
+    chit_ok(home.path(), &["send", "--session", &sess2, "--no-wait", "--as", "beta", "observe-msg-2"]);
+
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    let _ = child.kill();
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(stdout.contains("observe-msg-1"), "observe should see msg from session 1: {}", stdout);
+    assert!(stdout.contains("observe-msg-2"), "observe should see msg from session 2: {}", stdout);
+    assert!(stdout.contains("alpha"), "observe should show sender alpha");
+    assert!(stdout.contains("beta"), "observe should show sender beta");
+
+    chit_stop(home.path());
+}
+
+#[test]
+fn test_observe_channel_filter() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let sess = chit_start(home.path());
+
+    chit_ok(home.path(), &["session", "rename", &sess, "help:auth-module"]);
+
+    let mut child = std::process::Command::new(chit_bin())
+        .env("HOME", home.path())
+        .args(&["observe", "--since", "0", "--channel", "help", "--json"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to start observe");
+
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    chit_ok(home.path(), &["send", "--session", &sess, "--no-wait", "--as", "helper", "help-request-msg"]);
+
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    let _ = child.kill();
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(stdout.contains("help-request-msg"), "observe --channel should filter: {}", stdout);
+    assert!(stdout.contains("help:auth-module"), "should include session name");
+
+    chit_stop(home.path());
+}
+
+#[test]
+fn test_observe_from_filter() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let sess = chit_start(home.path());
+
+    let mut child = std::process::Command::new(chit_bin())
+        .env("HOME", home.path())
+        .args(&["observe", "--since", "0", "--from", "monitor", "--json"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to start observe");
+
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    chit_ok(home.path(), &["send", "--session", &sess, "--no-wait", "--as", "monitor", "monitor-only-msg"]);
+    chit_ok(home.path(), &["send", "--session", &sess, "--no-wait", "--as", "other", "should-be-filtered"]);
+
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    let _ = child.kill();
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(stdout.contains("monitor-only-msg"), "observe --from should include monitor msg: {}", stdout);
+    assert!(!stdout.contains("should-be-filtered"), "observe --from should exclude other senders");
+
+    chit_stop(home.path());
+}
+
+#[test]
+fn test_observe_match_filter() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let sess = chit_start(home.path());
+
+    let mut child = std::process::Command::new(chit_bin())
+        .env("HOME", home.path())
+        .args(&["observe", "--since", "0", "--match", "urgent", "--json"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to start observe");
+
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    chit_ok(home.path(), &["send", "--session", &sess, "--no-wait", "--as", "alert", "urgent: production issue"]);
+    chit_ok(home.path(), &["send", "--session", &sess, "--no-wait", "--as", "chat", "just a normal update"]);
+
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    let _ = child.kill();
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(stdout.contains("urgent"), "observe --match should match urgent: {}", stdout);
+    assert!(!stdout.contains("normal update"), "observe --match should exclude non-matching");
 
     chit_stop(home.path());
 }

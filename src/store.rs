@@ -35,15 +35,18 @@ pub struct Store {
     messages: Arc<RwLock<HashMap<String, Vec<Message>>>>,
     broadcast: Arc<RwLock<HashMap<String, broadcast::Sender<DaemonEvent>>>>,
     next_msg_id: Arc<RwLock<HashMap<String, u64>>>,
+    global_tx: broadcast::Sender<(String, DaemonEvent)>,
 }
 
 impl Store {
     pub fn new() -> Self {
+        let (global_tx, _) = broadcast::channel(256);
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             messages: Arc::new(RwLock::new(HashMap::new())),
             broadcast: Arc::new(RwLock::new(HashMap::new())),
             next_msg_id: Arc::new(RwLock::new(HashMap::new())),
+            global_tx,
         }
     }
 
@@ -117,6 +120,7 @@ impl Store {
         if let Some(tx) = self.broadcast.read().await.get(session_id) {
             let _ = tx.send(DaemonEvent::NewMessage(msg.clone()));
         }
+        let _ = self.global_tx.send((session_id.to_string(), DaemonEvent::NewMessage(msg.clone())));
 
         Some(msg)
     }
@@ -205,6 +209,7 @@ impl Store {
             if let Some(tx) = self.broadcast.read().await.get(session_id) {
                 let _ = tx.send(DaemonEvent::SessionClosed);
             }
+            let _ = self.global_tx.send((session_id.to_string(), DaemonEvent::SessionClosed));
             true
         } else {
             false
@@ -222,6 +227,10 @@ impl Store {
             .await
             .get(session_id)
             .map(|tx| tx.subscribe())
+    }
+
+    pub fn subscribe_global(&self) -> broadcast::Receiver<(String, DaemonEvent)> {
+        self.global_tx.subscribe()
     }
 
 }

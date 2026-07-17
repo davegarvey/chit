@@ -106,6 +106,20 @@ pub enum Commands {
         #[arg(long, short = 'j')]
         json: bool,
     },
+    Observe {
+        #[arg(long)]
+        since: Option<u64>,
+        #[arg(long)]
+        r#match: Option<String>,
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        channel: Option<String>,
+        #[arg(long)]
+        timeout: Option<u64>,
+        #[arg(long, short = 'j')]
+        json: bool,
+    },
     List {
         #[arg(long, short = 'j')]
         json: bool,
@@ -170,6 +184,9 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Commands::Recap { session, session_arg, since, cursor, from, limit, json } => {
             cmd_recap(session.or(session_arg), since.or(cursor), from, limit, json).await
+        }
+        Commands::Observe { since, r#match, from, channel, timeout, json } => {
+            cmd_observe(since, r#match, from, channel, timeout, json).await
         }
         Commands::List { json } => cmd_list(json).await,
         Commands::Close { session, session_arg, json } => cmd_close(session.or(session_arg), json).await,
@@ -557,13 +574,13 @@ async fn cmd_follow(
             let event_block = buffer[..pos].to_string();
             buffer = buffer[pos + 2..].to_string();
 
-            let mut event_type = "message";
+            let event_type = event_block.lines()
+                .find_map(|line| line.strip_prefix("event: "))
+                .unwrap_or("message");
             let mut data = String::new();
 
             for line in event_block.lines() {
-                if let Some(val) = line.strip_prefix("event: ") {
-                    event_type = val;
-                } else if let Some(val) = line.strip_prefix("data: ") {
+                if let Some(val) = line.strip_prefix("data: ") {
                     data = val.to_string();
                 }
             }
@@ -597,6 +614,87 @@ async fn cmd_follow(
     }
 
     Ok(())
+}
+
+async fn cmd_observe(
+    since: Option<u64>,
+    match_str: Option<String>,
+    from: Option<String>,
+    channel: Option<String>,
+    _timeout: Option<u64>,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    let (host, port) = ensure_daemon_running().await?;
+
+    let since_id = since.unwrap_or(0);
+    let mut path = format!("/api/observe?since={}", since_id);
+    if let Some(ref m) = match_str {
+        path = format!("{}&match={}", path, urlencoding(m));
+    }
+    if let Some(ref f) = from {
+        path = format!("{}&from={}", path, f);
+    }
+    if let Some(ref ch) = channel {
+        path = format!("{}&channel={}", path, ch);
+    }
+    let url = daemon_url(&host, port, &path);
+
+    let client = reqwest::Client::new();
+    let resp = client.get(&url).send().await?;
+
+    if !resp.status().is_success() {
+        let err: ErrorResponse = resp.json().await?;
+        fail(json_output, &err.error, "OBSERVE_ERROR");
+    }
+
+    let mut buffer = String::new();
+    let mut stream = resp.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+        while let Some(pos) = buffer.find("\n\n") {
+            let event_block = buffer[..pos].to_string();
+            buffer = buffer[pos + 2..].to_string();
+
+            let mut data = String::new();
+
+            for line in event_block.lines() {
+                if let Some(val) = line.strip_prefix("data: ") {
+                    data = val.to_string();
+                }
+            }
+
+            if json_output {
+                println!("{}", data);
+            } else if let Ok(evt) = serde_json::from_str::<ObserveEvent>(&data) {
+                match evt.r#type.as_str() {
+                    "message" => {
+                        if let Some(msg) = evt.message {
+                            let session_label = evt.session_name.unwrap_or(evt.session_id);
+                            println!("[{}] {} ({}):\n    {}", session_label, msg.sender, msg.timestamp.format("%H:%M:%S"), msg.content);
+                        }
+                    }
+                    "closed" => {
+                        let session_label = evt.session_name.unwrap_or(evt.session_id);
+                        println!("[{}] session closed", session_label);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn urlencoding(s: &str) -> String {
+    s.replace(' ', "%20")
+     .replace('#', "%23")
+     .replace('&', "%26")
+     .replace('=', "%3D")
+     .replace('+', "%2B")
 }
 
 async fn cmd_recap(

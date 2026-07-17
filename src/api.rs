@@ -41,6 +41,7 @@ pub fn create_router(store: Arc<Store>) -> Router {
         .route("/api/sessions/:id/recap", get(recap_session))
         .route("/api/sessions/:id/rename", post(rename_session))
         .route("/api/sessions/:id/events", get(stream_events))
+        .route("/api/observe", get(observe_events))
         .route("/api/status", get(status))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state)
@@ -436,6 +437,127 @@ async fn stream_events(
         }
     });
 
+    (StatusCode::OK, Sse::new(stream)).into_response()
+}
+
+#[derive(Deserialize)]
+struct ObserveParams {
+    since: Option<u64>,
+    r#match: Option<String>,
+    from: Option<String>,
+    channel: Option<String>,
+}
+
+async fn observe_events(
+    State(state): State<AppState>,
+    Query(params): Query<ObserveParams>,
+) -> impl IntoResponse {
+    let since = params.since.unwrap_or(0);
+    let match_str = params.r#match;
+    let from = params.from;
+    let channel = params.channel;
+
+    let sessions = state.store.list_sessions().await;
+
+    // First, replay historical messages from all sessions
+    let mut history: Vec<Result<Event, Infallible>> = Vec::new();
+    for session in &sessions {
+        if let Some(ref ch) = channel {
+            match session.name {
+                Some(ref name) if !name.contains(ch) => continue,
+                None => continue,
+                _ => {}
+            }
+        }
+        let msgs = state.store.get_messages_since(&session.id, since).await;
+        for msg in &msgs {
+            if let Some(ref f) = from {
+                if msg.sender != *f { continue; }
+            }
+            if let Some(ref m) = match_str {
+                if !msg.content.contains(m.as_str()) { continue; }
+            }
+            let session_name = session.name.clone();
+            let observe = ObserveEvent {
+                session_id: session.id.clone(),
+                session_name,
+                r#type: "message".to_string(),
+                message: Some(msg.clone()),
+            };
+            history.push(Ok(Event::default().event("message").data(serde_json::to_string(&observe).unwrap())));
+        }
+    }
+
+    let mut rx = state.store.subscribe_global();
+    let sessions_clone = sessions.clone();
+
+    let (tx, rx_channel) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
+
+    // Send historical messages first
+    for event in history {
+        if tx.send(event).await.is_err() {
+            return (StatusCode::OK, Sse::new(tokio_stream::wrappers::ReceiverStream::new(rx_channel))).into_response();
+        }
+    }
+
+    // Then stream new events
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok((session_id, event)) => {
+                    let session = sessions_clone.iter().find(|s| s.id == session_id);
+                    let session_name = session.and_then(|s| s.name.clone());
+
+                    if let Some(ref ch) = channel {
+                        match session_name {
+                            Some(ref name) if !name.contains(ch) => continue,
+                            None => continue,
+                            _ => {}
+                        }
+                    }
+
+                    let opt = match event {
+                        DaemonEvent::NewMessage(msg) => {
+                            if msg.id <= since { continue; }
+                            if let Some(ref f) = from {
+                                if msg.sender != *f { continue; }
+                            }
+                            if let Some(ref m) = match_str {
+                                if !msg.content.contains(m.as_str()) { continue; }
+                            }
+                            let observe = ObserveEvent {
+                                session_id,
+                                session_name,
+                                r#type: "message".to_string(),
+                                message: Some(msg),
+                            };
+                            Some(Event::default().event("message").data(serde_json::to_string(&observe).unwrap()))
+                        }
+                        DaemonEvent::SessionClosed => {
+                            let observe = ObserveEvent {
+                                session_id,
+                                session_name,
+                                r#type: "closed".to_string(),
+                                message: None,
+                            };
+                            Some(Event::default().event("closed").data(serde_json::to_string(&observe).unwrap()))
+                        }
+                    };
+
+                    if let Some(event) = opt {
+                        if tx.send(Ok(event)).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+
+    use tokio_stream::wrappers::ReceiverStream;
+    let stream = ReceiverStream::new(rx_channel);
     (StatusCode::OK, Sse::new(stream)).into_response()
 }
 
