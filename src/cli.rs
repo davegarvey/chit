@@ -60,7 +60,7 @@ pub enum Commands {
     /// Send a message (alias: send)
     #[command(alias = "send")]
     Chat {
-        #[arg(help = "Message content (use - to read from stdin)")]
+        #[arg(help = "Message content (omit to read from piped stdin)")]
         message: Option<String>,
         #[arg(long, help = "Read message content from a file")]
         file: Option<String>,
@@ -472,20 +472,18 @@ async fn cmd_send(
             .trim_end_matches('\n')
             .to_string()
     } else if let Some(msg) = &message {
-        if msg == "-" {
-            let mut buf = String::new();
-            std::io::stdin().read_to_string(&mut buf)?;
-            if buf.trim().is_empty() && std::io::stdin().is_terminal() {
-                anyhow::bail!("No message provided. Use a positional argument, --file <path>, or pipe to stdin");
-            }
-            buf.trim_end_matches('\n').to_string()
-        } else {
-            msg.clone()
-        }
+        msg.clone()
     } else if !std::io::stdin().is_terminal() {
-        let mut buf = String::new();
-        std::io::stdin().read_to_string(&mut buf)?;
-        buf.trim_end_matches('\n').to_string()
+        let read = tokio::task::spawn_blocking(|| {
+            let mut buf = String::new();
+            std::io::stdin().read_to_string(&mut buf).ok()?;
+            let trimmed = buf.trim_end_matches('\n').to_string();
+            if trimmed.is_empty() { None } else { Some(trimmed) }
+        });
+        match tokio::time::timeout(Duration::from_millis(500), read).await {
+            Ok(Ok(Some(content))) => content,
+            _ => anyhow::bail!("No message provided. Use a positional argument, --file <path>, or pipe to stdin"),
+        }
     } else {
         anyhow::bail!("No message provided. Use a positional argument, --file <path>, or pipe to stdin");
     };

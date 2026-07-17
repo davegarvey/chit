@@ -917,7 +917,7 @@ fn test_send_stdin() {
 
     let mut child = Command::new(chit_bin())
         .env("HOME", home.path())
-        .args(&["send", "--session", &sess, "--quiet", "-"])
+        .args(&["send", "--session", &sess, "--quiet"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
