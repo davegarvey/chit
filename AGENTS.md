@@ -43,3 +43,7 @@ Run cleanup when done:
 3. Sub-agents carry out their tasks using chit for cross-project messaging, then write feedback to a results file
 4. `./eval/run.sh collect <scenario>` — reads feedback, stops daemon, prints summary
 5. `./eval/run.sh cleanup` — removes temp dirs
+
+## Eval Skill
+
+The `chit-eval` skill (`.opencode/skills/chit-eval/SKILL.md`) documents the full eval workflow for coding agents working on chit. Load it with the `skill` tool when running evaluations.
