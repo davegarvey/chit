@@ -74,12 +74,14 @@ pub enum Commands {
     /// Send a message (alias: send)
     #[command(alias = "send")]
     Chat {
+        #[arg(help = "Session ID (positional, or use --session/-s)")]
+        session: Option<String>,
+        #[arg(long = "session", short, alias = "session-id", help = "Session ID")]
+        session_arg: Option<String>,
         #[arg(help = "Message content (omit to read from piped stdin)")]
         message: Option<String>,
         #[arg(long, help = "Read message content from a file")]
         file: Option<String>,
-        #[arg(long, short, help = "Session ID (uses active session if set)")]
-        session: Option<String>,
         #[arg(
             long,
             short = 'w',
@@ -267,18 +269,32 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             json,
         } => cmd_use(session_id, clear, json).await,
         Commands::Chat {
+            session,
+            session_arg,
             message,
             file,
-            session,
             wait,
             sender_name,
             json,
             quiet,
             timeout,
         } => {
+            // Resolve session: --session/-s flag takes priority
+            // Positional session arg is used if it looks like a sess_ ID
+            // Otherwise the positional arg is treated as the message
+            let session_flag = session_arg.is_some();
+            let resolved_session = session_arg
+                .or_else(|| session.as_ref().filter(|s| s.starts_with("sess_")).cloned());
+            let resolved_message = message.or_else(|| {
+                if session_flag {
+                    session
+                } else {
+                    session.filter(|s| !s.starts_with("sess_"))
+                }
+            });
             cmd_send(
-                session,
-                message,
+                resolved_session,
+                resolved_message,
                 file,
                 wait,
                 sender_name.as_deref(),
@@ -536,7 +552,7 @@ async fn cmd_use(session_id: Option<String>, clear: bool, json_output: bool) -> 
                     serde_json::json!({"session_id": id, "status": "active"})
                 );
             } else {
-                println!("Active session set to {}", id);
+                println!("Active session: {}", id);
             }
             return Ok(());
         } else if name_matches.len() > 1 {
@@ -562,7 +578,7 @@ async fn cmd_use(session_id: Option<String>, clear: bool, json_output: bool) -> 
                     serde_json::json!({"session_id": id, "status": "active"})
                 );
             } else {
-                println!("Active session set to {}", id);
+                println!("Active session: {}", id);
             }
             return Ok(());
         } else if id_matches.len() > 1 {
@@ -632,6 +648,7 @@ async fn cmd_start(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_send(
     session_arg: Option<String>,
     message: Option<String>,
@@ -817,8 +834,14 @@ async fn cmd_wait(
     let wait_timeout = timeout_secs.unwrap_or(default_timeout);
 
     let session_id = if let Some(id) = session_arg.clone() {
+        if !json_output {
+            eprintln!("Waiting for messages in session {}...", id);
+        }
         id
     } else if let Some(id) = store::read_active_session().await {
+        if !json_output {
+            eprintln!("Waiting for messages in session {}...", id);
+        }
         id
     } else {
         let url = daemon_url(&host, port, "/api/sessions");
@@ -940,7 +963,27 @@ async fn cmd_wait(
     }
 
     let url = daemon_url(&host, port, &path);
+
+    let spinner = if !json_output {
+        let spinner = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+                eprint!(".");
+                let _ = std::io::Write::flush(&mut std::io::stderr());
+            }
+        });
+        Some(spinner)
+    } else {
+        None
+    };
+
     let resp = client.get(&url).send().await?;
+
+    if let Some(s) = spinner {
+        s.abort();
+        let _ = s.await;
+    }
 
     if !resp.status().is_success() {
         let err: ErrorResponse = resp.json().await?;

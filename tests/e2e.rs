@@ -831,11 +831,7 @@ fn test_use_set_and_clear() {
 
     // Set active session (in project dir so active-session is isolated)
     let out = chit_in(home.path(), Some(project.path()), &["use", &sess]).0;
-    assert!(
-        out.contains("Active session set"),
-        "should confirm: {}",
-        out
-    );
+    assert!(out.contains("Active session"), "should confirm: {}", out);
 
     // Show active session
     let out = chit_in(home.path(), Some(project.path()), &["use"]).0;
@@ -848,7 +844,7 @@ fn test_use_set_and_clear() {
         &["send", "sent via active session"],
     )
     .2
-    .then(|| ())
+    .then_some(())
     .unwrap();
 
     let recap = chit_ok(home.path(), &["recap", &sess]);
@@ -951,7 +947,7 @@ fn test_start_sets_active_session() {
         &["send", "message via start"],
     )
     .2
-    .then(|| ())
+    .then_some(())
     .unwrap();
 
     let recap = chit_ok(home.path(), &["recap", &sess]);
@@ -1015,7 +1011,7 @@ fn test_use_by_name() {
     // Use by name from isolated project dir
     let out = chit_in(home.path(), Some(project.path()), &["use", "test-session"]).0;
     assert!(
-        out.contains("Active session set"),
+        out.contains("Active session"),
         "use by name should confirm: {}",
         out
     );
@@ -1027,7 +1023,7 @@ fn test_use_by_name() {
         &["send", "sent via name"],
     )
     .2
-    .then(|| ())
+    .then_some(())
     .unwrap();
     let recap = chit_ok(home.path(), &["recap", &sess]);
     assert!(
@@ -1084,7 +1080,7 @@ fn test_observe_timeout() {
 
     let child = std::process::Command::new(chit_bin())
         .env("HOME", home.path())
-        .args(&["observe", "--since", "0", "--json", "--timeout", "3"])
+        .args(["observe", "--since", "0", "--json", "--timeout", "3"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -1120,7 +1116,7 @@ fn test_observe_streams_all_sessions() {
 
     let mut child = std::process::Command::new(chit_bin())
         .env("HOME", home.path())
-        .args(&["observe", "--since", "0", "--json"])
+        .args(["observe", "--since", "0", "--json"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -1178,7 +1174,7 @@ fn test_observe_channel_filter() {
 
     let mut child = std::process::Command::new(chit_bin())
         .env("HOME", home.path())
-        .args(&["observe", "--since", "0", "--channel", "help", "--json"])
+        .args(["observe", "--since", "0", "--channel", "help", "--json"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -1224,7 +1220,7 @@ fn test_observe_from_filter() {
 
     let mut child = std::process::Command::new(chit_bin())
         .env("HOME", home.path())
-        .args(&["observe", "--since", "0", "--from", "monitor", "--json"])
+        .args(["observe", "--since", "0", "--from", "monitor", "--json"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -1281,7 +1277,7 @@ fn test_observe_match_filter() {
 
     let mut child = std::process::Command::new(chit_bin())
         .env("HOME", home.path())
-        .args(&["observe", "--since", "0", "--match", "urgent", "--json"])
+        .args(["observe", "--since", "0", "--match", "urgent", "--json"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -1341,7 +1337,7 @@ fn test_send_stdin() {
 
     let mut child = Command::new(chit_bin())
         .env("HOME", home.path())
-        .args(&["send", "--session", &sess, "--quiet"])
+        .args(["send", "--session", &sess, "--quiet"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -1373,7 +1369,7 @@ fn test_follow_streams_messages() {
 
     let mut child = Command::new(chit_bin())
         .env("HOME", home.path())
-        .args(&["follow", "--session", &sess, "--since", "0", "--json"])
+        .args(["follow", "--session", &sess, "--since", "0", "--json"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -1409,7 +1405,7 @@ fn test_follow_limit_caps_messages() {
 
     let mut child = Command::new(chit_bin())
         .env("HOME", home.path())
-        .args(&[
+        .args([
             "follow",
             "--session",
             &sess,
@@ -1447,7 +1443,7 @@ fn test_follow_limit_zero_is_unlimited() {
 
     let mut child = Command::new(chit_bin())
         .env("HOME", home.path())
-        .args(&[
+        .args([
             "follow",
             "--session",
             &sess,

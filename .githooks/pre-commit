@@ -1,5 +1,6 @@
 #!/bin/sh
-# Pre-commit hook — reject unformatted Rust code.
+# Pre-commit hook — reject unformatted Rust code and clippy warnings.
 set -e
 
 cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
