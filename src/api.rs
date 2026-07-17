@@ -110,6 +110,15 @@ async fn send_message(
     Path(id): Path<String>,
     Json(req): Json<SendMessageRequest>,
 ) -> impl IntoResponse {
+    if req.content.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "message content cannot be empty".to_string(),
+            }),
+        )
+            .into_response();
+    }
     match state
         .store
         .add_message(&id, &req.sender, &req.content)
@@ -197,15 +206,20 @@ async fn wait_for_message(
     let limit = params.limit;
     let from = params.from.as_deref();
 
+    let session = state.store.get_session(&id).await;
+    let is_closed = match &session {
+        Some(s) => s.closed,
+        None => false,
+    };
+
     let existing = state
         .store
         .get_messages_filtered(&id, since, limit, from)
         .await;
     if !existing.is_empty() {
-        return (StatusCode::OK, Json(wrap_wait(existing, false, None, false))).into_response();
+        return (StatusCode::OK, Json(wrap_wait(existing, false, None, is_closed))).into_response();
     }
 
-    let session = state.store.get_session(&id).await;
     match session {
         Some(s) if s.closed => {
             return (
@@ -258,7 +272,9 @@ async fn wait_for_message(
                         } else {
                             vec![msg]
                         };
-                        return wrap_wait(msgs, false, None, false);
+                        let session = state.store.get_session(&id).await;
+                        let closed = session.map(|s| s.closed).unwrap_or(false);
+                        return wrap_wait(msgs, false, None, closed);
                     }
                 }
                 Ok(DaemonEvent::SessionClosed) => {
@@ -275,11 +291,11 @@ async fn wait_for_message(
 
     match result {
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
-        Err(_elapsed) => (
-            StatusCode::OK,
-            Json(wrap_wait(vec![], true, Some(wait_timeout), false)),
-        )
-            .into_response(),
+        Err(_elapsed) => {
+            let mut resp = wrap_wait(vec![], true, Some(wait_timeout), false);
+            resp.cursor = Some(since);
+            (StatusCode::OK, Json(resp)).into_response()
+        }
     }
 }
 
@@ -325,6 +341,15 @@ async fn rename_session(
     Path(id): Path<String>,
     Json(req): Json<RenameSessionRequest>,
 ) -> impl IntoResponse {
+    if req.name.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "session name cannot be empty".to_string(),
+            }),
+        )
+            .into_response();
+    }
     if state.store.rename_session(&id, &req.name).await {
         (
             StatusCode::OK,
