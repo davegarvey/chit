@@ -494,7 +494,14 @@ async fn cmd_follow(
                 }
                 "message" => {
                     if json_output {
-                        println!("{}", data);
+                        if let Ok(msg) = serde_json::from_str::<Message>(&data) {
+                            let mut obj: serde_json::Value =
+                                serde_json::from_str(&data).unwrap_or_default();
+                            obj["cursor"] = serde_json::json!(msg.id);
+                            println!("{}", serde_json::to_string(&obj).unwrap());
+                        } else {
+                            println!("{}", data);
+                        }
                     } else if let Ok(msg) = serde_json::from_str::<Message>(&data) {
                         println!("[{}] {} ({}):\n    {}", msg.id, msg.sender, msg.timestamp.format("%H:%M:%S"), msg.content);
                     }
