@@ -115,6 +115,7 @@ pub struct ErrorResponse {
 pub enum DaemonEvent {
     NewMessage(Message),
     SessionClosed,
+    SessionCreated(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

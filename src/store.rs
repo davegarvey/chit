@@ -77,6 +77,8 @@ impl Store {
         self.broadcast.write().await.insert(id.clone(), tx);
         self.next_msg_id.write().await.insert(id.clone(), 1);
 
+        let _ = self.global_tx.send((id.clone(), DaemonEvent::SessionCreated(id.clone())));
+
         if let Some((sender, content)) = initial_message {
             drop(sessions);
             self.add_message(&id, &sender, &content).await;

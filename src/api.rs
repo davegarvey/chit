@@ -41,6 +41,7 @@ pub fn create_router(store: Arc<Store>) -> Router {
         .route("/api/sessions/:id/recap", get(recap_session))
         .route("/api/sessions/:id/rename", post(rename_session))
         .route("/api/sessions/:id/events", get(stream_events))
+        .route("/api/sessions/wait-new", get(wait_new_session))
         .route("/api/observe", get(observe_events))
         .route("/api/status", get(status))
         .layer(tower_http::cors::CorsLayer::permissive())
@@ -299,6 +300,7 @@ async fn wait_for_message(
                 Ok(DaemonEvent::SessionClosed) => {
                     return wrap_wait(vec![], false, None, true);
                 }
+                Ok(DaemonEvent::SessionCreated(_)) => continue,
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(broadcast::error::RecvError::Closed) => {
                     return wrap_wait(vec![], false, None, true);
@@ -314,6 +316,51 @@ async fn wait_for_message(
             let mut resp = wrap_wait(vec![], true, Some(wait_timeout), false);
             resp.cursor = Some(since);
             (StatusCode::OK, Json(resp)).into_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct WaitNewParams {
+    timeout_secs: Option<u64>,
+}
+
+async fn wait_new_session(
+    State(state): State<AppState>,
+    Query(params): Query<WaitNewParams>,
+) -> impl IntoResponse {
+    let timeout_secs = params.timeout_secs.unwrap_or(300);
+    let mut rx = state.store.subscribe_global();
+
+    let existing_count = state.store.list_sessions().await.len();
+
+    let timeout_dur = Duration::from_secs(timeout_secs);
+    let result = timeout(timeout_dur, async {
+        loop {
+            match rx.recv().await {
+                Ok((_sid, DaemonEvent::SessionCreated(id))) => {
+                    return serde_json::json!({"session_id": id});
+                }
+                Ok((_sid, DaemonEvent::NewMessage(msg))) => {
+                    let sessions = state.store.list_sessions().await;
+                    if sessions.len() > existing_count {
+                        return serde_json::json!({"session_id": msg.session_id});
+                    }
+                }
+                Ok((_sid, DaemonEvent::SessionClosed)) => continue,
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => {
+                    return serde_json::json!({"error": "daemon shutting down"});
+                }
+            }
+        }
+    })
+    .await;
+
+    match result {
+        Ok(json) => (StatusCode::OK, Json(json)).into_response(),
+        Err(_elapsed) => {
+            (StatusCode::OK, Json(serde_json::json!({"timeout": true, "timeout_after": timeout_secs}))).into_response()
         }
     }
 }
@@ -450,6 +497,7 @@ async fn stream_events(
             Ok(DaemonEvent::SessionClosed) => {
                 Some(Ok::<_, Infallible>(Event::default().event("closed").data("{}")))
             }
+            Ok(DaemonEvent::SessionCreated(_)) => None,
             Err(_) => None,
         }
     });
@@ -558,6 +606,17 @@ async fn observe_events(
                                 message: None,
                             };
                             Some(Event::default().event("closed").data(serde_json::to_string(&observe).unwrap()))
+                        }
+                        DaemonEvent::SessionCreated(id) => {
+                            let session = state.store.get_session(&id).await;
+                            let name = session.and_then(|s| s.name);
+                            let observe = ObserveEvent {
+                                session_id: id,
+                                session_name: name,
+                                r#type: "created".to_string(),
+                                message: None,
+                            };
+                            Some(Event::default().event("created").data(serde_json::to_string(&observe).unwrap()))
                         }
                     };
 

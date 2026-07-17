@@ -95,6 +95,8 @@ pub enum Commands {
         from: Option<String>,
         #[arg(long, short = 'j', help = "Output in JSON format")]
         json: bool,
+        #[arg(long, help = "Wait for a new session to be created (ignores other args)")]
+        r#new: bool,
     },
     /// Stream new messages as they arrive (SSE)
     Follow {
@@ -213,8 +215,12 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Commands::Chat { message, file, session, wait, sender_name, json, quiet, timeout } => {
             cmd_send(session, message, file, wait, sender_name.as_deref(), json, quiet, timeout).await
         }
-        Commands::Wait { session, session_arg, timeout, since, limit, from, json } => {
-            cmd_wait(session.or(session_arg), timeout, since, limit, from, json).await
+        Commands::Wait { session, session_arg, timeout, since, limit, from, json, r#new } => {
+            if r#new {
+                cmd_wait_new(timeout, json).await
+            } else {
+                cmd_wait(session.or(session_arg), timeout, since, limit, from, json).await
+            }
         }
         Commands::Follow { session, session_arg, since, limit, json, timeout } => {
             cmd_follow(session.or(session_arg), since, limit, json, timeout).await
@@ -938,6 +944,27 @@ async fn cmd_session_rename(session_id: String, name: String, json_output: bool)
         println!("{}", serde_json::to_string(&result).unwrap());
     } else {
         println!("Session {} renamed to '{}'", session_id, result["name"]);
+    }
+    Ok(())
+}
+
+async fn cmd_wait_new(timeout_secs: Option<u64>, json_output: bool) -> anyhow::Result<()> {
+    let (host, port) = ensure_daemon_running().await?;
+    let timeout = timeout_secs.unwrap_or(300);
+    let url = daemon_url(&host, port, &format!("/api/sessions/wait-new?timeout_secs={}", timeout));
+    let client = reqwest::Client::new();
+    let resp = client.get(&url).send().await?;
+    let result: serde_json::Value = resp.json().await?;
+
+    if json_output {
+        println!("{}", serde_json::to_string(&result).unwrap());
+    } else if let Some(sid) = result.get("session_id").and_then(|v| v.as_str()) {
+        println!("{}", sid);
+    } else if result.get("timeout") == Some(&serde_json::json!(true)) {
+        eprintln!("timeout after {}s, no new session", result["timeout_after"].as_u64().unwrap_or(timeout));
+        process::exit(2);
+    } else if let Some(err) = result.get("error").and_then(|v| v.as_str()) {
+        fail(json_output, err, "WAIT_NEW_ERROR");
     }
     Ok(())
 }
