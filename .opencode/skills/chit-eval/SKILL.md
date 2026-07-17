@@ -14,17 +14,22 @@ Evaluate chit by running sub-agents through realistic multi-agent scenarios. Sub
 ## Quick Start
 
 ```bash
-# 1. Setup
+# 1. Setup (starts daemon, verifies health, writes task prompts, creates feedback dirs)
 ./eval/run.sh setup cross-project
 
 # 2. Launch sub-agents (copy prompts from setup output into Task tool calls)
 #    - Agent Alpha: sends bug report, waits for reply
 #    - Agent Beta:  reads messages, replies with fix
+#    Agents write feedback to eval/agent-tasks/<scenario>/feedback/ when done
 
-# 3. Collect results
+# 3. Collect (stops daemon, reads and displays saved feedback files)
 ./eval/run.sh collect cross-project
 
-# 4. Clean up
+# 4. Critique (auto-injects saved feedback into critic prompt)
+./eval/run.sh critique cross-project
+# Copy the generated prompt into a Task tool call for the critic sub-agent
+
+# 5. Clean up
 ./eval/run.sh cleanup
 ```
 
@@ -38,35 +43,43 @@ Evaluate chit by running sub-agents through realistic multi-agent scenarios. Sub
 ## The Eval Loop
 
 ```
-1. Setup     →  ./eval/run.sh setup <scenario>
-                 Creates temp dirs, starts daemon, writes task prompts.
-                 Outputs ready-to-copy Task tool prompts.
+1. Setup    →  ./eval/run.sh setup <scenario>
+                Creates temp dirs, starts daemon, writes task prompts.
+                Daemon health verified via `chit list`. chit version displayed.
 
-2. Launch    →  Copy prompts from terminal into Task tool calls.
-                 Launch all agents in parallel (workers + monitor).
+2. Launch   →  Copy prompts from terminal into Task tool calls.
+                Agents write feedback to a file AND return it inline.
+                Launch all agents in parallel (workers + monitor).
 
-3. Collect   →  ./eval/run.sh collect <scenario>
-                 Stops daemon, prints agent feedback.
+3. Collect  →  ./eval/run.sh collect <scenario>
+                Stops daemon, reads saved feedback files,
+                prints aggregated feedback to terminal.
+                Feedback persists in eval/agent-tasks/<scenario>/feedback/
 
-4. Analyze   →  Read feedback carefully. Cross-reference agents. Extract:
-                 - P0 bugs (crashes, data loss, hangs)
-                 - P1 friction (confusing UX, missing features)
-                 - P2 wishes (nice-to-haves)
-                 ↓
+4. Critique →  ./eval/run.sh critique <scenario>
+                Auto-reads saved feedback files and generates a
+                ready-to-use critic prompt with real feedback injected.
+                Copy the output into a Task tool call for the critic.
+
+5. Analyze  →  Read the critic's report. Review recommended items:
+                - P0 bugs (crashes, data loss, hangs)
+                - P1 friction (confusing UX, missing features)
+                - P2 wishes (nice-to-haves)
+                ↓
         Any items selected for spec?
        /                          \
       YES                          NO → STOP
        │
-5. Spec      →  openspec new change "<name>"  (proposal → specs → design → tasks)
+6. Spec      →  openspec new change "<name>"  (proposal → specs → design → tasks)
 
-6. Implement →  Work through tasks, test after each group
+7. Implement →  Work through tasks, test after each group
 
-7. PR & CI   →  Commit, PR, wait for CI, fix if needed, merge
+8. PR & CI   →  Commit, PR, wait for CI, fix if needed, merge
        │
        └──→  Go to step 1 (full re-run)
 ```
 
-Keep iterating: implement the selected items, then re-run the eval (step 1) with the same scenario. Each round validates that previous fixes actually resolved the issues and surfaces any new ones. The loop exits only when step 4 produces zero items worth specifying. As long as feedback contains material improvements — P0 bugs, P1 friction, or strong P2 signals — carry on looping.
+Keep iterating: implement the selected items, then re-run the eval (step 1) with the same scenario. Each round validates that previous fixes actually resolved the issues and surfaces any new ones. The loop exits only when step 5 produces zero items worth specifying. As long as feedback contains material improvements — P0 bugs, P1 friction, or strong P2 signals — carry on looping.
 
 ### CI Failure Patterns
 
@@ -110,7 +123,7 @@ Keep iterating: implement the selected items, then re-run the eval (step 1) with
 - `chit start` silently switching the active session is confusing when agents experiment. Better to keep it scoped: create only, use `chit use` to activate.
 - `chit rename` isn't a top-level command — it's `chit session rename`. Double-check command structure in task docs.
 - `chit observe`'s scope (showing all sessions including the observer's own) can be surprising. Clarify in docs.
-- Collecting feedback via file writes is unreliable — agents may claim to write without actually doing so. Prefer inline feedback in Task results.
+- Agents must write feedback to a file AND return it inline. The file feeds the critique step; the inline copy is for the human reader. The `collect` command checks for file existence and warns if agents skipped it.
 
 ### OpenSpec workflow
 - Always red team the spec before implementing. Find inaccurate claims (e.g. "endpoint already supports X" when it doesn't), contradictions, and missing edge cases.
@@ -129,8 +142,18 @@ Keep iterating: implement the selected items, then re-run the eval (step 1) with
    - `## Setup` — expected directory structure and seed files
    - `## Agent Tasks` — one section per agent, describing their project context and goal
    - `## Feedback` — questions each agent should answer
-2. Add a `setup_<name>` and `collect_<name>` function in `eval/run.sh`.
+2. Add `setup_<name>`, `collect_<name>`, and `critique_<name>` functions in `eval/run.sh`.
 3. Register the scenario name in the `case` statement's help text.
+
+### Best practices for setup functions
+
+- Call `clean_scenario "<name>"` at the start to remove previous run artifacts
+- Create feedback dir: `feedback_dir=$(feedback_dir_for "<name>")` then `mkdir -p "$feedback_dir"`
+- Include the exact feedback file path in each agent's task prompt (e.g. `$feedback_dir/alpha.md`)
+- Use `check_daemon_health` after starting the daemon instead of a bare `sleep`
+- Call `show_chit_version` to record which binary was tested
+- For collect, delegate to the shared `collect_feedback "<name>"`
+- For critique, delegate to the shared `critique_generate "<name>" "<Title>" "<specifics>"`
 
 ## Reference
 

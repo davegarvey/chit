@@ -23,6 +23,8 @@ pub struct Session {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenameSessionRequest {
     pub name: String,
+    #[serde(default)]
+    pub force: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::Utc;
 use rand::Rng;
@@ -198,13 +199,28 @@ impl Store {
             .collect()
     }
 
-    pub async fn rename_session(&self, session_id: &str, name: &str) -> bool {
+    pub async fn rename_session(
+        &self,
+        session_id: &str,
+        name: &str,
+        force: bool,
+    ) -> Result<bool, String> {
         let mut sessions = self.sessions.write().await;
         if let Some(session) = sessions.get_mut(session_id) {
+            if session.name.as_deref() == Some(name) {
+                return Ok(true);
+            }
+            if session.name.is_some() && !force {
+                return Err(format!(
+                    "Session {} already has name '{}'. Use --force to override",
+                    session_id,
+                    session.name.as_deref().unwrap()
+                ));
+            }
             session.name = Some(name.to_string());
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 
@@ -230,9 +246,13 @@ impl Store {
         }
     }
 
-    pub async fn has_active_sessions(&self) -> bool {
+    pub async fn has_recent_activity(&self, max_idle: Duration) -> bool {
         let sessions = self.sessions.read().await;
-        sessions.values().any(|s| !s.closed)
+        let now = Utc::now();
+        sessions.values().any(|s| {
+            let elapsed = now - s.last_activity;
+            elapsed.num_seconds() as u64 <= max_idle.as_secs()
+        })
     }
 
     pub async fn subscribe(&self, session_id: &str) -> Option<broadcast::Receiver<DaemonEvent>> {

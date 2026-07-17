@@ -21,7 +21,7 @@ pub async fn run_daemon() -> anyhow::Result<()> {
 
     let idle_timeout = {
         let config = read_user_config().await;
-        config["idle_timeout"].as_u64().unwrap_or(600)
+        config["idle_timeout"].as_u64().unwrap_or(3600)
     };
 
     let store_clone = store.clone();
@@ -32,8 +32,8 @@ pub async fn run_daemon() -> anyhow::Result<()> {
         loop {
             tokio::time::sleep(check_interval).await;
 
-            let has_active = store_clone.has_active_sessions().await;
-            if !has_active {
+            let has_recent_activity = store_clone.has_recent_activity(max_idle).await;
+            if !has_recent_activity {
                 let daemon_path = chit_home().join("daemon.json");
                 if daemon_path.exists() {
                     let metadata = match tokio::fs::metadata(&daemon_path).await {

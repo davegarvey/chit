@@ -19,13 +19,30 @@ You are working in `{{BETA_DIR}}`. Review the project README. You know the data 
 
 ## Feedback
 
-Each agent returns feedback inline answering:
+Each agent writes feedback to `$AGENT_TASKS_DIR/<scenario>/feedback/<agent>.md`
+AND returns it inline in their Task result. The file is the source of truth for
+the critique step; the inline copy is for the human reader.
+
+Questions each agent answers:
 - How easy was it to start using chit?
 - How intuitive were send, wait, recap?
 - Was there any confusion about the API (flags, defaults, session management)?
 - What was the most frustrating part?
 - What would you change or improve?
 - Did the tool help or hinder collaboration?
+
+## Eval Loop (updated)
+
+```
+1. Setup   →  ./eval/run.sh setup cross-project
+2. Launch  →  Copy prompts into parallel Task tool calls
+3. Collect →  ./eval/run.sh collect cross-project
+               Reads saved feedback files, stops daemon
+4. Critique → ./eval/run.sh critique cross-project
+               Auto-injects saved feedback into critic prompt
+5. Fix
+6. Re-eval
+```
 
 ## Seed Files
 
@@ -99,3 +116,4 @@ and use `csv.reader` for the actual parsing, only converting to dict afterwards.
 2. Alpha sends detailed bug description: `chit send --session <id> "row.split(',') breaks on quoted fields like 'New York, NY'"`
 3. Beta receives via `chit wait --session <id>` or `chit recap --session <id>` then replies with the fix
 4. Alpha reads the fix, applies it, and confirms
+5. Both agents write feedback to their respective files (file paths are in the task prompt)

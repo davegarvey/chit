@@ -84,6 +84,11 @@ pub enum Commands {
         file: Option<String>,
         #[arg(
             long,
+            help = "Read message content from stdin (bypasses shell interpretation)"
+        )]
+        stdin: bool,
+        #[arg(
+            long,
             short = 'w',
             help = "Wait for a reply after sending (default: return immediately)"
         )]
@@ -249,6 +254,8 @@ pub enum SessionCommands {
         name: String,
         #[arg(long, short = 'j', help = "Output in JSON format")]
         json: bool,
+        #[arg(long, help = "Force rename even if session already has a name")]
+        force: bool,
     },
 }
 
@@ -273,6 +280,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             session_arg,
             message,
             file,
+            stdin,
             wait,
             sender_name,
             json,
@@ -292,10 +300,14 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                     session.filter(|s| !s.starts_with("sess_"))
                 }
             });
+            if stdin && resolved_message.is_some() {
+                eprintln!("Warning: --stdin is set, ignoring positional message argument");
+            }
             cmd_send(
                 resolved_session,
                 resolved_message,
                 file,
+                stdin,
                 wait,
                 sender_name.as_deref(),
                 json,
@@ -362,7 +374,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 session_id,
                 name,
                 json,
-            } => cmd_session_rename(session_id, name, json).await,
+                force,
+            } => cmd_session_rename(session_id, name, json, force).await,
         },
     }
 }
@@ -649,10 +662,40 @@ async fn cmd_start(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn auto_create_session(
+    host: &str,
+    port: u16,
+    sender_override: Option<&str>,
+    quiet: bool,
+    json_output: bool,
+) -> anyhow::Result<String> {
+    let client = reqwest::Client::new();
+    let url = daemon_url(host, port, "/api/sessions");
+    let sender = store::get_sender_name(sender_override);
+    let project_name = store::read_project_config().await;
+    let resp = client
+        .post(&url)
+        .json(&CreateSessionRequest {
+            message: None,
+            sender: Some(sender),
+            name: project_name,
+        })
+        .send()
+        .await?;
+    let session: CreateSessionResponse = resp.json().await?;
+    store::write_active_session(&session.id).await?;
+    if !quiet && !json_output {
+        println!("→ Created session {}", session.id);
+    }
+    Ok(session.id)
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn cmd_send(
     session_arg: Option<String>,
     message: Option<String>,
     file: Option<String>,
+    stdin_flag: bool,
     should_wait: bool,
     sender_override: Option<&str>,
     json_output: bool,
@@ -664,6 +707,24 @@ async fn cmd_send(
             .await?
             .trim_end_matches('\n')
             .to_string()
+    } else if stdin_flag {
+        if std::io::stdin().is_terminal() {
+            anyhow::bail!("No message provided via stdin");
+        }
+        let read = tokio::task::spawn_blocking(|| {
+            let mut buf = String::new();
+            std::io::stdin().read_to_string(&mut buf).ok()?;
+            let trimmed = buf.trim_end_matches('\n').to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        });
+        match tokio::time::timeout(Duration::from_secs(3600), read).await {
+            Ok(Ok(Some(content))) => content,
+            _ => anyhow::bail!("No message provided via stdin (empty)"),
+        }
     } else if let Some(msg) = &message {
         msg.clone()
     } else if !std::io::stdin().is_terminal() {
@@ -691,7 +752,7 @@ async fn cmd_send(
 
     let (host, port) = ensure_daemon_running().await?;
 
-    // Resolve session: explicit, active, stale-replace, or error
+    // Resolve session: explicit, active, stale-replace, or auto-create
     let session_id = if let Some(id) = session_arg.clone() {
         id
     } else if let Some(id) = store::read_active_session().await {
@@ -703,48 +764,28 @@ async fn cmd_send(
             _ => {
                 // Stale active session — replace with a new one
                 store::clear_active_session().await?;
-                let client = reqwest::Client::new();
-                let url = daemon_url(&host, port, "/api/sessions");
-                let sender = store::get_sender_name(sender_override);
-                let project_name = store::read_project_config().await;
-                let resp = client
-                    .post(&url)
-                    .json(&CreateSessionRequest {
-                        message: None,
-                        sender: Some(sender),
-                        name: project_name,
-                    })
-                    .send()
-                    .await?;
-                let session: CreateSessionResponse = resp.json().await?;
-                store::write_active_session(&session.id).await?;
-                if !quiet && !json_output {
-                    println!("→ Created session {}", session.id);
-                }
-                session.id
+                auto_create_session(&host, port, sender_override, quiet, json_output).await?
             }
         }
     } else {
-        // No active session — list available sessions and error
+        // No active session — check if any sessions exist
         let client = reqwest::Client::new();
         let url = daemon_url(&host, port, "/api/sessions");
         let resp = client.get(&url).send().await?;
         let sessions: Vec<SessionSummary> = resp.json().await?;
         let active: Vec<_> = sessions.iter().filter(|s| !s.closed).collect();
         if active.is_empty() {
-            fail(
-                json_output,
-                "No active sessions. Start one with `chit start`",
-                "NO_ACTIVE_SESSION",
-            );
+            // Auto-create a new session
+            auto_create_session(&host, port, sender_override, quiet, json_output).await?
+        } else {
+            let mut msg = "No active session set.".to_string();
+            for s in &active {
+                let name = s.name.as_deref().unwrap_or("-");
+                msg.push_str(&format!("\n  {}  {}", s.id, name));
+            }
+            msg.push_str("\nSet one with `chit use <id>`");
+            fail(json_output, &msg, "NO_ACTIVE_SESSION");
         }
-        let mut msg = "No active session set.".to_string();
-        for s in &active {
-            let name = s.name.as_deref().unwrap_or("-");
-            msg.push_str(&format!("\n  {}  {}", s.id, name));
-        }
-        msg.push_str("\nSet one with `chit use <id>`");
-        fail(json_output, &msg, "NO_ACTIVE_SESSION");
     };
 
     let sender = store::get_sender_name(sender_override);
@@ -1358,6 +1399,7 @@ async fn cmd_session_rename(
     session_id: String,
     name: String,
     json_output: bool,
+    force: bool,
 ) -> anyhow::Result<()> {
     let (host, port) = ensure_daemon_running().await?;
 
@@ -1365,13 +1407,17 @@ async fn cmd_session_rename(
     let url = daemon_url(&host, port, &format!("/api/sessions/{}/rename", session_id));
     let resp = client
         .post(&url)
-        .json(&json!({"name": name}))
+        .json(&json!({"name": name, "force": force}))
         .send()
         .await?;
 
-    if !resp.status().is_success() {
+    let status = resp.status();
+    if !status.is_success() {
         let err: ErrorResponse = resp.json().await?;
-        fail(json_output, &err.error, "SESSION_NOT_FOUND");
+        match status.as_u16() {
+            409 => fail(json_output, &err.error, "SESSION_ALREADY_NAMED"),
+            _ => fail(json_output, &err.error, "SESSION_NOT_FOUND"),
+        }
     }
 
     let result: serde_json::Value = resp.json().await?;

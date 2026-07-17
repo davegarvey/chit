@@ -5,7 +5,6 @@ CHIT_BIN="${CHIT_BIN:-$(dirname "$0")/../target/release/chit}"
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCENARIOS_DIR="$BASE_DIR/scenarios"
 AGENT_TASKS_DIR="$BASE_DIR/agent-tasks"
-RESULTS_DIR="$BASE_DIR/results"
 
 if [ ! -f "$CHIT_BIN" ]; then
   CHIT_BIN="$(dirname "$0")/../target/debug/chit"
@@ -15,13 +14,63 @@ if [ ! -f "$CHIT_BIN" ]; then
   exit 1
 fi
 
+feedback_dir_for() {
+  echo "$AGENT_TASKS_DIR/$1/feedback"
+}
+
+check_daemon_health() {
+  local pid_file="$1"
+  local chit_home="$2"
+  if [ ! -f "$pid_file" ]; then
+    echo "Error: No PID file found at $pid_file"
+    return 1
+  fi
+  local pid
+  pid=$(cat "$pid_file")
+  if ! kill -0 "$pid" 2>/dev/null; then
+    echo "Error: Daemon (PID $pid) is not running"
+    return 1
+  fi
+  sleep 1
+  if ! CHIT_HOME="$chit_home" "$CHIT_BIN" list &>/dev/null; then
+    echo "Error: Daemon (PID $pid) is running but not responding to 'chit list'"
+    return 1
+  fi
+  echo "Daemon OK (PID $pid)"
+  return 0
+}
+
+show_chit_version() {
+  local version
+  version=$("$CHIT_BIN" --version 2>/dev/null || echo "unknown")
+  echo "chit version: $version"
+}
+
 cleanup() {
   echo "Cleaning up temp directories..."
-  rm -rf "$BASE_DIR/tmp" "$AGENT_TASKS_DIR" "$RESULTS_DIR"
+  rm -rf "$BASE_DIR/tmp" "$AGENT_TASKS_DIR"
   echo "Done."
 }
 
+clean_scenario() {
+  local scenario="$1"
+  echo "Cleaning previous $scenario run..."
+  rm -rf "$BASE_DIR/tmp/$scenario" "$AGENT_TASKS_DIR/$scenario"
+  # Clean up stale daemon PID from previous run
+  if [ -f "$BASE_DIR/tmp/daemon.pid" ]; then
+    local pid
+    pid=$(cat "$BASE_DIR/tmp/daemon.pid")
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "Stopping stale daemon (PID $pid)..."
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+    rm -f "$BASE_DIR/tmp/daemon.pid"
+  fi
+}
+
 setup_cross_project() {
+  clean_scenario "cross-project"
   local tmp_dir="$BASE_DIR/tmp/cross-project"
   mkdir -p "$tmp_dir"/{project-alpha,project-beta}
 
@@ -108,11 +157,11 @@ if __name__ == "__main__":
     main()
 PY
 
-  # Results are returned inline by Task agents
-  mkdir -p "$RESULTS_DIR"
-
   # Write task files for the coding agent
   mkdir -p "$AGENT_TASKS_DIR/cross-project"
+  local feedback_dir
+  feedback_dir=$(feedback_dir_for "cross-project")
+  mkdir -p "$feedback_dir"
 
   cat > "$AGENT_TASKS_DIR/cross-project/agent-alpha.md" << TASK
 # Agent Alpha — Cross-Project Eval
@@ -166,10 +215,14 @@ chit observe                  Watch all sessions (multi-agent)
 Try as many as you can. You don't need to use them all, but the more you
 try, the better the feedback.
 
-### Feedback (return inline)
-After your collaboration, return your feedback as part of your final message
-(not written to a file). Answer honestly:
+### Feedback (write to file + return inline)
+After your collaboration, **write your feedback to the file below** AND include
+it in your final message. The file is what gets fed into the product review, so
+be thorough. Write the file first, then return the same content inline.
 
+Feedback file path: $feedback_dir/alpha.md
+
+Answer honestly:
 - What commands and features did you try?
 - Which were intuitive? Which were confusing?
 - What was the most frustrating moment?
@@ -177,7 +230,7 @@ After your collaboration, return your feedback as part of your final message
 - If you could change one thing, what would it be?
 - Did using chit feel natural for agent-to-agent collaboration?
 
-Start your feedback with:
+Start your file and inline response with:
 ## Feedback from Agent Alpha (project-alpha)
 TASK
 
@@ -233,10 +286,14 @@ chit observe                  Watch all sessions (multi-agent)
 Try as many as you can. You don't need to use them all, but the more you
 try, the better the feedback.
 
-### Feedback (return inline)
-After your collaboration, return your feedback as part of your final message
-(not written to a file). Answer honestly:
+### Feedback (write to file + return inline)
+After your collaboration, **write your feedback to the file below** AND include
+it in your final message. The file is what gets fed into the product review, so
+be thorough. Write the file first, then return the same content inline.
 
+Feedback file path: $feedback_dir/beta.md
+
+Answer honestly:
 - What commands and features did you try?
 - Which were intuitive? Which were confusing?
 - What was the most frustrating moment?
@@ -244,15 +301,23 @@ After your collaboration, return your feedback as part of your final message
 - If you could change one thing, what would it be?
 - Did using chit feel natural for agent-to-agent collaboration?
 
-Start your feedback with:
+Start your file and inline response with:
 ## Feedback from Agent Beta (project-beta)
 TASK
 
   # Start the daemon (nohup + disown so the bash tool doesn't kill it on timeout)
   CHIT_HOME="$tmp_dir/.chit" nohup "$CHIT_BIN" daemon > /dev/null 2>&1 &
   disown
-  echo $! > "$BASE_DIR/tmp/daemon.pid"
-  sleep 1
+  local daemon_pid=$!
+  echo $daemon_pid > "$BASE_DIR/tmp/daemon.pid"
+  echo "Starting daemon..."
+
+  if ! check_daemon_health "$BASE_DIR/tmp/daemon.pid" "$tmp_dir/.chit"; then
+    echo "Error: Daemon failed to start. Aborting."
+    exit 1
+  fi
+
+  show_chit_version
 
   echo "==========================================="
   echo "  cross-project eval: READY"
@@ -285,22 +350,46 @@ TASK
   echo "==========================================="
 }
 
-collect_cross_project() {
-  local results_file="$RESULTS_DIR/cross-project-feedback.md"
-  echo "==========================================="
-  echo "  cross-project eval: RESULTS"
-  echo "==========================================="
-  if [ -f "$results_file" ]; then
-    cat "$results_file"
-  else
-    echo "Feedback was returned inline by the Task agents."
-    echo "Check the Task results above for agent feedback."
-  fi
-  echo "==========================================="
+collect_feedback() {
+  local scenario="$1"
+  local feedback_dir
+  feedback_dir=$(feedback_dir_for "$scenario")
   stop_daemon
+  echo "==========================================="
+  echo "  $scenario eval: COLLECTED"
+  echo "==========================================="
+  echo ""
+  if [ -d "$feedback_dir" ]; then
+    local count=0
+    for f in "$feedback_dir"/*.md; do
+      if [ -f "$f" ]; then
+        echo "--- $(basename "$f" .md) ---"
+        cat "$f"
+        echo ""
+        count=$((count + 1))
+      fi
+    done
+    if [ "$count" -eq 0 ]; then
+      echo "No feedback files found in $feedback_dir"
+    else
+      echo "---"
+      echo "Saved $count feedback file(s) in $feedback_dir"
+    fi
+  else
+    echo "No feedback directory found at $feedback_dir"
+    echo "Did the agents write their feedback files?"
+  fi
+  echo ""
+  echo "Next step:  ./eval/run.sh critique $scenario"
+  echo "==========================================="
+}
+
+collect_cross_project() {
+  collect_feedback "cross-project"
 }
 
 setup_observe() {
+  clean_scenario "observe"
   local tmp_dir="$BASE_DIR/tmp/observe"
   mkdir -p "$tmp_dir"/{project-alpha,project-beta,project-gamma,monitor}
 
@@ -313,10 +402,10 @@ When done, send a chit status update.
 SEED
   done
 
-  # Results are returned inline by Task agents
-  mkdir -p "$RESULTS_DIR"
-
   mkdir -p "$AGENT_TASKS_DIR/observe"
+  local feedback_dir
+  feedback_dir=$(feedback_dir_for "observe")
+  mkdir -p "$feedback_dir"
 
   cat > "$AGENT_TASKS_DIR/observe/agent-alpha.md" << TASK
 # Agent Alpha — Observe Eval
@@ -339,14 +428,19 @@ Create \`src/server.py\` with a health-check endpoint that returns:
 Use chit to send status updates as you work (start, done, etc).
 All chit commands must be run from $tmp_dir/project-alpha.
 
-### Feedback (return inline)
-After your task, return your feedback as part of your final message (not written to a file):
+### Feedback (write to file + return inline)
+After your task, **write your feedback to the file below** AND include it in
+your final message. Write the file first, then return the same content inline.
+
+Feedback file path: $feedback_dir/alpha.md
+
+Answer:
 - How easy was it to get started with chit?
 - How intuitive were the commands?
 - Was anything confusing or surprising?
 - What would you improve?
 
-Start with:
+Start your file and inline response with:
 ## Feedback from Agent Alpha (project-alpha)
 TASK
 
@@ -367,14 +461,19 @@ Create \`src/watch.py\` that watches a file path and prints changes.
 Use chit to send status updates.
 All chit commands must be run from $tmp_dir/project-beta.
 
-### Feedback (return inline)
-After your task, return your feedback as part of your final message (not written to a file):
+### Feedback (write to file + return inline)
+After your task, **write your feedback to the file below** AND include it in
+your final message. Write the file first, then return the same content inline.
+
+Feedback file path: $feedback_dir/beta.md
+
+Answer:
 - How easy was it to get started with chit?
 - How intuitive were the commands?
 - Was anything confusing or surprising?
 - What would you improve?
 
-Start with:
+Start your file and inline response with:
 ## Feedback from Agent Beta (project-beta)
 TASK
 
@@ -396,14 +495,19 @@ Include title, description, and usage section.
 Use chit to send status updates.
 All chit commands must be run from $tmp_dir/project-gamma.
 
-### Feedback (return inline)
-After your task, return your feedback as part of your final message (not written to a file):
+### Feedback (write to file + return inline)
+After your task, **write your feedback to the file below** AND include it in
+your final message. Write the file first, then return the same content inline.
+
+Feedback file path: $feedback_dir/gamma.md
+
+Answer:
 - How easy was it to get started with chit?
 - How intuitive were the commands?
 - Was anything confusing or surprising?
 - What would you improve?
 
-Start with:
+Start your file and inline response with:
 ## Feedback from Agent Gamma (project-gamma)
 TASK
 
@@ -423,8 +527,13 @@ export CHIT_HOME=$tmp_dir/.chit
 Run \`chit observe\` and watch the three agents work.
 Note what you can see — do you have enough context to understand each project?
 
-### Feedback (return inline)
-After observing, return your feedback as part of your final message (not written to a file):
+### Feedback (write to file + return inline)
+After observing, **write your feedback to the file below** AND include it in
+your final message. Write the file first, then return the same content inline.
+
+Feedback file path: $feedback_dir/monitor.md
+
+Answer:
 - Did \`chit observe\` give you an accurate picture of what was happening?
 - Could you distinguish between the different sessions/agents?
 - What would make observe more useful?
@@ -432,15 +541,23 @@ After observing, return your feedback as part of your final message (not written
 - How easy was it to get started with chit?
 - How intuitive were the commands?
 
-Start with:
+Start your file and inline response with:
 ## Feedback from Monitor
 TASK
 
   # Start daemon (nohup + disown so the bash tool doesn't kill it on timeout)
   CHIT_HOME="$tmp_dir/.chit" nohup "$CHIT_BIN" daemon > /dev/null 2>&1 &
   disown
-  echo $! > "$BASE_DIR/tmp/daemon.pid"
-  sleep 1
+  local daemon_pid=$!
+  echo $daemon_pid > "$BASE_DIR/tmp/daemon.pid"
+  echo "Starting daemon..."
+
+  if ! check_daemon_health "$BASE_DIR/tmp/daemon.pid" "$tmp_dir/.chit"; then
+    echo "Error: Daemon failed to start. Aborting."
+    exit 1
+  fi
+
+  show_chit_version
 
   echo "==========================================="
   echo "  observe eval: READY"
@@ -476,18 +593,98 @@ TASK
 }
 
 collect_observe() {
-  local results_file="$RESULTS_DIR/observe-feedback.md"
+  collect_feedback "observe"
+}
+
+critique_generate() {
+  local scenario="$1"
+  local feedback_dir
+  feedback_dir=$(feedback_dir_for "$scenario")
+  local title="$2"
+  local specifics="$3"
+
   echo "==========================================="
-  echo "  observe eval: RESULTS"
+  echo "  CRITIC PROMPT — $scenario"
   echo "==========================================="
-  if [ -f "$results_file" ]; then
-    cat "$results_file"
-  else
-    echo "Feedback was returned inline by the Task agents."
-    echo "Check the Task results above for agent feedback."
+  echo ""
+
+  local feedback_content=""
+  if [ -d "$feedback_dir" ]; then
+    for f in "$feedback_dir"/*.md; do
+      if [ -f "$f" ]; then
+        feedback_content="$feedback_content
+$(cat "$f")
+"
+      fi
+    done
   fi
-  echo "==========================================="
-  stop_daemon
+
+  if [ -z "$feedback_content" ]; then
+    echo "WARNING: No feedback files found in $feedback_dir"
+    echo "The agents may not have written their feedback files yet."
+    echo "You can still manually paste feedback below."
+    echo ""
+    feedback_content="__FEEDBACK__"
+  fi
+
+  cat << CRITPROMPT
+Copy this into a Task tool call for the critic sub-agent:
+
+task description="Critic — $scenario" subagent_type="general" prompt="
+# Critic — $title
+
+You are evaluating feedback from agents that tested the **chit** agent-to-agent messaging tool.
+
+## Collected Feedback
+
+$feedback_content
+
+## Your Task
+
+Read the feedback above carefully. Cross-reference between agents and assess each item:
+
+1. **Cross-reference** — identify where different agents report the same issue in different words
+2. **Assess materiality** — would fixing this make a real, noticeable difference to the product?
+3. **Classify** each item as:
+   - **P0** — must fix (crashes, data loss, hangs, broken core flow)
+   - **P1** — should fix (confusing UX, missing feature that blocks workflow)
+   - **P2** — nice to have (polish, convenience, minor ergonomics)
+4. **Recommend only material items** — exclude noise, one-off preferences, and non-actionable feedback
+$specifics
+
+Return your analysis as:
+## Critic Report
+### Recommended Items
+- **P0** | <description> | <rationale>
+- **P1** | <description> | <rationale>
+- **P2** | <description> | <rationale>
+
+### Excluded Items (with reasons)
+- <description> | <why excluded>
+
+### Summary
+- Total issues found vs recommended
+- Patterns or themes in the feedback
+- Single most impactful change to make
+---
+"
+CRITPROMPT
+
+  if [ "$feedback_content" != "__FEEDBACK__" ]; then
+    echo ""
+    echo "==========================================="
+    echo "  Feedback was auto-injected from $feedback_dir"
+    echo "  If agents didn't write files, manually replace __FEEDBACK__ above."
+    echo "==========================================="
+  fi
+}
+
+critique_cross_project() {
+  critique_generate "cross-project" "Cross-Project Eval" ""
+}
+
+critique_observe() {
+  critique_generate "observe" "Observe Eval" "- The feedback is specifically about the \`chit observe\` feature — pay special attention to multi-agent monitoring concerns"
 }
 
 stop_daemon() {
@@ -522,16 +719,24 @@ case "${1:-help}" in
     fi
     "collect_${2//-/_}"
     ;;
+  critique)
+    if [ -z "${2:-}" ]; then
+      echo "Usage: $0 critique <scenario>"
+      exit 1
+    fi
+    "critique_${2//-/_}"
+    ;;
   cleanup)
     stop_daemon
     cleanup
     ;;
   *)
-    echo "Usage: $0 {setup|collect|cleanup} [scenario]"
+    echo "Usage: $0 {setup|collect|critique|cleanup} [scenario]"
     echo ""
     echo "Commands:"
     echo "  setup <scenario>    Prepare environment and launch daemon"
     echo "  collect <scenario>  Gather feedback and stop daemon"
+    echo "  critique <scenario> Run critic sub-agent on collected feedback"
     echo "  cleanup             Remove all temp files"
     echo ""
     echo "Scenarios: cross-project observe"

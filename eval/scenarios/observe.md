@@ -29,11 +29,32 @@ You are watching all agent activity via `chit observe`. Run `chit observe` from 
 
 ## Feedback (all agents)
 
+Each agent writes feedback to `$AGENT_TASKS_DIR/observe/feedback/<agent>.md`
+AND returns it inline in their Task result. The file is the source of truth for
+the critique step; the inline copy is for the human reader.
+
+Questions all agents answer:
 - How easy was it to get started with chit?
 - How intuitive were the commands you used?
 - Was anything confusing or surprising?
 - What would you improve?
-- For the monitor specifically: did `chit observe` give you an accurate picture of what was happening?
+
+Monitor additionally answers:
+- Did `chit observe` give you an accurate picture of what was happening?
+- Could you distinguish between the different sessions/agents?
+
+## Eval Loop (updated)
+
+```
+1. Setup   →  ./eval/run.sh setup observe
+2. Launch  →  Copy prompts into Task tool calls (agents in parallel, then monitor)
+3. Collect →  ./eval/run.sh collect observe
+               Reads saved feedback files, stops daemon
+4. Critique → ./eval/run.sh critique observe
+               Auto-injects saved feedback into critic prompt
+5. Fix
+6. Re-eval
+```
 
 ## Seed Files
 

@@ -463,20 +463,20 @@ async fn rename_session(
         )
             .into_response();
     }
-    if state.store.rename_session(&id, &req.name).await {
-        (
+    match state.store.rename_session(&id, &req.name, req.force).await {
+        Ok(true) => (
             StatusCode::OK,
             Json(serde_json::json!({"session_id": id, "name": req.name, "status": "renamed"})),
         )
-            .into_response()
-    } else {
-        (
+            .into_response(),
+        Ok(false) => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
                 error: format!("session '{}' not found", id),
             }),
         )
-            .into_response()
+            .into_response(),
+        Err(msg) => (StatusCode::CONFLICT, Json(ErrorResponse { error: msg })).into_response(),
     }
 }
 

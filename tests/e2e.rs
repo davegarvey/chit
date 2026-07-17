@@ -688,7 +688,10 @@ fn test_session_rename_and_show() {
     let home = tempfile::tempdir().unwrap();
     let sess = chit_start(home.path());
 
-    let close = chit_ok(home.path(), &["session", "rename", &sess, "my-project"]);
+    let close = chit_ok(
+        home.path(),
+        &["session", "rename", &sess, "my-project", "--force"],
+    );
     assert!(close.contains("renamed"), "rename should confirm");
 
     let show = chit_ok(home.path(), &["session", "show", &sess]);
@@ -961,19 +964,35 @@ fn test_start_sets_active_session() {
 }
 
 #[test]
-fn test_send_no_active_session_fails() {
+fn test_send_auto_creates_session() {
     let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
 
-    let (_stdout, stderr, ok) = chit_in(
-        home.path(),
-        Some(project.path()),
-        &["send", "this should fail"],
-    );
-    assert!(!ok, "send without active session should fail");
+    let (stdout, _stderr, ok) =
+        chit_in(home.path(), Some(project.path()), &["send", "auto-created"]);
+    assert!(ok, "send without active session should auto-create");
     assert!(
-        stderr.contains("No active session"),
-        "error should mention no active session: {}",
+        stdout.contains("Created session"),
+        "should mention created session: {}",
+        stdout
+    );
+
+    chit_stop(home.path());
+}
+
+#[test]
+fn test_send_no_active_session_with_existing_sessions_fails() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+
+    chit_start(home.path());
+
+    let (_stdout, stderr, ok) =
+        chit_in(home.path(), Some(project.path()), &["send", "should fail"]);
+    assert!(!ok, "send with existing sessions but no active should fail");
+    assert!(
+        stderr.contains("No active session set"),
+        "error should list active sessions: {}",
         stderr
     );
 
@@ -981,20 +1000,21 @@ fn test_send_no_active_session_fails() {
 }
 
 #[test]
-fn test_send_no_active_session_json_output() {
+fn test_send_auto_creates_json_output() {
     let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
 
-    let (_stdout, stderr, ok) = chit_in(
+    let (stdout, _stderr, ok) = chit_in(
         home.path(),
         Some(project.path()),
-        &["send", "--json", "this should fail"],
+        &["send", "--json", "auto-created"],
     );
-    assert!(!ok, "send without active session should fail");
+    assert!(ok, "send --json without active session should auto-create");
+    let val: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert!(
-        stderr.contains("\"error\""),
-        "json output should contain error field: {}",
-        stderr
+        val.get("session_id").and_then(|v| v.as_str()).is_some(),
+        "JSON response should contain session_id: {}",
+        stdout
     );
 
     chit_stop(home.path());
@@ -1006,7 +1026,10 @@ fn test_use_by_name() {
     let project = tempfile::tempdir().unwrap();
 
     let sess = chit_start(home.path());
-    chit_ok(home.path(), &["session", "rename", &sess, "test-session"]);
+    chit_ok(
+        home.path(),
+        &["session", "rename", &sess, "test-session", "--force"],
+    );
 
     // Use by name from isolated project dir
     let out = chit_in(home.path(), Some(project.path()), &["use", "test-session"]).0;
@@ -1060,7 +1083,10 @@ fn test_list_shows_session_name() {
     let home = tempfile::tempdir().unwrap();
 
     let sess = chit_start(home.path());
-    chit_ok(home.path(), &["session", "rename", &sess, "visible-name"]);
+    chit_ok(
+        home.path(),
+        &["session", "rename", &sess, "visible-name", "--force"],
+    );
 
     let list = chit_ok(home.path(), &["list"]);
     assert!(
@@ -1169,7 +1195,7 @@ fn test_observe_channel_filter() {
 
     chit_ok(
         home.path(),
-        &["session", "rename", &sess, "help:auth-module"],
+        &["session", "rename", &sess, "help:auth-module", "--force"],
     );
 
     let mut child = std::process::Command::new(chit_bin())
@@ -1470,6 +1496,74 @@ fn test_follow_limit_zero_is_unlimited() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("unlim-a"), "limit 0 should show unlim-a");
     assert!(stdout.contains("unlim-b"), "limit 0 should show unlim-b");
+
+    chit_stop(home.path());
+}
+
+#[test]
+fn test_rename_rejects_overwrite_without_force() {
+    let home = tempfile::tempdir().unwrap();
+    let sess = chit_start(home.path());
+
+    let (_stdout, stderr, ok) = chit(home.path(), &["session", "rename", &sess, "new-name"]);
+    assert!(
+        !ok,
+        "rename without --force should fail when session has a name"
+    );
+    assert!(
+        stderr.contains("already has name") || stderr.contains("--force"),
+        "error should mention existing name: {}",
+        stderr
+    );
+
+    chit_stop(home.path());
+}
+
+#[test]
+fn test_rename_noop_same_name() {
+    let home = tempfile::tempdir().unwrap();
+    let sess = chit_start(home.path());
+
+    let (_stdout, _stderr, ok) = chit(
+        home.path(),
+        &["session", "rename", &sess, "chit", "--force"],
+    );
+    assert!(ok, "rename to same name with --force should succeed");
+
+    chit_stop(home.path());
+}
+
+#[test]
+fn test_stdin_flag_piped() {
+    let home = tempfile::tempdir().unwrap();
+    let sess = chit_start(home.path());
+
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(chit_bin())
+        .env("HOME", home.path())
+        .args(["send", "--session", &sess, "--stdin", "--quiet"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to start chit");
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"explicit stdin flag message")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "--stdin send should succeed");
+
+    let recap = chit_ok(home.path(), &["recap", &sess]);
+    assert!(
+        recap.contains("explicit stdin flag message"),
+        "stdin message with --stdin flag should be in recap"
+    );
 
     chit_stop(home.path());
 }
