@@ -323,7 +323,7 @@ mod tests {
         assert!(msg.is_some());
         assert_eq!(msg.unwrap().id, 2);
 
-        let messages = store.get_all_messages(&id).await;
+        let messages = store.get_messages_since(&id, 0).await;
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].content, "hello");
         assert_eq!(messages[1].content, "reply");
@@ -383,7 +383,7 @@ mod tests {
             .create_session(Some(("init-agent".into(), "initial message".into())))
             .await;
 
-        let messages = store.get_all_messages(&id).await;
+        let messages = store.get_messages_since(&id, 0).await;
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].sender, "init-agent");
         assert_eq!(messages[0].content, "initial message");

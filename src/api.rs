@@ -107,6 +107,7 @@ async fn send_message(
         Some(msg) => (
             StatusCode::CREATED,
             Json(SendMessageResponse {
+                cursor: Some(msg.id),
                 id: msg.id,
                 session_id: msg.session_id,
                 sender: msg.sender,
@@ -289,10 +290,11 @@ async fn recap_session(
         }
     };
 
-    let since = params.since.unwrap_or(0);
+    let since = params.cursor.or(params.since).unwrap_or(0);
+    let from = params.from.as_deref();
     let messages = state
         .store
-        .get_messages_filtered(&id, since, params.limit, None)
+        .get_messages_filtered(&id, since, params.limit, from)
         .await;
     let cursor = compute_cursor(&messages);
 

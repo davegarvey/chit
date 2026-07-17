@@ -84,6 +84,10 @@ pub enum Commands {
         #[arg(long)]
         since: Option<u64>,
         #[arg(long)]
+        cursor: Option<u64>,
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
         limit: Option<usize>,
         #[arg(long, short = 'j')]
         json: bool,
@@ -143,8 +147,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Commands::Follow { session, session_arg, since, json, timeout } => {
             cmd_follow(session.or(session_arg), since, json, timeout).await
         }
-        Commands::Recap { session, session_arg, since, limit, json } => {
-            cmd_recap(session.or(session_arg), since, limit, json).await
+        Commands::Recap { session, session_arg, since, cursor, from, limit, json } => {
+            cmd_recap(session.or(session_arg), since.or(cursor), from, limit, json).await
         }
         Commands::List { json } => cmd_list(json).await,
         Commands::Close { session, session_arg, json } => cmd_close(session.or(session_arg), json).await,
@@ -499,6 +503,7 @@ async fn cmd_follow(
 async fn cmd_recap(
     session_arg: Option<String>,
     since: Option<u64>,
+    from: Option<String>,
     limit: Option<usize>,
     json_output: bool,
 ) -> anyhow::Result<()> {
@@ -507,6 +512,9 @@ async fn cmd_recap(
 
     let since_id = since.unwrap_or(0);
     let mut path = format!("/api/sessions/{}/recap?since={}", session_id, since_id);
+    if let Some(ref f) = from {
+        path = format!("{}&from={}", path, f);
+    }
     if let Some(l) = limit {
         path = format!("{}&limit={}", path, l);
     }

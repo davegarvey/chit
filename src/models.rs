@@ -11,6 +11,7 @@ pub struct DaemonInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
+    #[serde(rename = "session_id")]
     pub id: String,
     pub created_at: DateTime<Utc>,
     pub last_activity: DateTime<Utc>,
@@ -50,6 +51,8 @@ pub struct SendMessageResponse {
     pub sender: String,
     pub content: String,
     pub timestamp: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +111,8 @@ pub enum DaemonEvent {
 pub struct RecapQuery {
     pub since: Option<u64>,
     pub limit: Option<usize>,
+    pub from: Option<String>,
+    pub cursor: Option<u64>,
 }
 
 #[cfg(test)]
