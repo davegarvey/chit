@@ -1,6 +1,6 @@
 [package]
 name = "chit-cli"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "Agent-to-agent messaging for AI coding tools"
 license = "MIT"
@@ -35,5 +35,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 rand = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures = "0.3"
 

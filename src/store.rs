@@ -127,6 +127,40 @@ impl Store {
             .unwrap_or_default()
     }
 
+    pub async fn get_messages_filtered(
+        &self,
+        session_id: &str,
+        since: u64,
+        limit: Option<usize>,
+        from: Option<&str>,
+    ) -> Vec<Message> {
+        let msgs = self.messages.read().await;
+        let result: Vec<Message> = msgs
+            .get(session_id)
+            .map(|v| {
+                v.iter()
+                    .filter(|m| {
+                        if m.id <= since {
+                            return false;
+                        }
+                        if let Some(sender) = from {
+                            if m.sender != sender {
+                                return false;
+                            }
+                        }
+                        true
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(limit) = limit {
+            result.into_iter().take(limit).collect()
+        } else {
+            result
+        }
+    }
+
     pub async fn get_session(&self, session_id: &str) -> Option<Session> {
         let sessions = self.sessions.read().await;
         sessions.get(session_id).cloned()
@@ -178,10 +212,6 @@ impl Store {
             .map(|tx| tx.subscribe())
     }
 
-    pub async fn get_all_messages(&self, session_id: &str) -> Vec<Message> {
-        let msgs = self.messages.read().await;
-        msgs.get(session_id).cloned().unwrap_or_default()
-    }
 }
 
 pub async fn read_daemon_json() -> anyhow::Result<DaemonInfo> {

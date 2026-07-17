@@ -58,16 +58,21 @@ pub struct WaitResponse {
     pub timeout: bool,
     pub timeout_after: Option<u64>,
     pub closed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecapResponse {
     pub session: Session,
     pub messages: Vec<Message>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSummary {
+    #[serde(rename = "session_id")]
     pub id: String,
     pub created_at: DateTime<Utc>,
     pub closed: bool,
@@ -92,10 +97,17 @@ pub struct ErrorResponse {
     pub error: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DaemonEvent {
     NewMessage(Message),
     SessionClosed,
+}
+
+/// Query parameters for the recap endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecapQuery {
+    pub since: Option<u64>,
+    pub limit: Option<usize>,
 }
 
 #[cfg(test)]
@@ -178,11 +190,13 @@ mod tests {
             timeout: true,
             timeout_after: Some(30),
             closed: false,
+            cursor: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
         let deserialized: WaitResponse = serde_json::from_str(&json).unwrap();
         assert!(deserialized.timeout);
         assert_eq!(deserialized.timeout_after, Some(30));
         assert!(!deserialized.closed);
+        assert_eq!(deserialized.cursor, None);
     }
 }

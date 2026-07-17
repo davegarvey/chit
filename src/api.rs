@@ -1,16 +1,23 @@
+use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{
+        sse::{Event, Sse},
+        IntoResponse,
+    },
     routing::{get, post},
     Json, Router,
 };
+use futures::stream;
 use serde::Deserialize;
 use tokio::sync::broadcast;
 use tokio::time::timeout;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::StreamExt;
 
 use crate::models::*;
 use crate::store::Store;
@@ -32,6 +39,7 @@ pub fn create_router(store: Arc<Store>) -> Router {
         )
         .route("/api/sessions/:id/wait", get(wait_for_message))
         .route("/api/sessions/:id/recap", get(recap_session))
+        .route("/api/sessions/:id/events", get(stream_events))
         .route("/api/status", get(status))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state)
@@ -148,6 +156,23 @@ async fn get_messages(
 struct WaitParams {
     since: Option<u64>,
     timeout_secs: Option<u64>,
+    limit: Option<usize>,
+    from: Option<String>,
+}
+
+fn compute_cursor(messages: &[Message]) -> Option<u64> {
+    messages.iter().map(|m| m.id).max()
+}
+
+fn wrap_wait(messages: Vec<Message>, timeout: bool, timeout_after: Option<u64>, closed: bool) -> WaitResponse {
+    let cursor = compute_cursor(&messages);
+    WaitResponse {
+        messages,
+        timeout,
+        timeout_after,
+        closed,
+        cursor,
+    }
 }
 
 async fn wait_for_message(
@@ -157,19 +182,15 @@ async fn wait_for_message(
 ) -> impl IntoResponse {
     let since = params.since.unwrap_or(0);
     let wait_timeout = params.timeout_secs.unwrap_or(300);
+    let limit = params.limit;
+    let from = params.from.as_deref();
 
-    let existing = state.store.get_messages_since(&id, since).await;
+    let existing = state
+        .store
+        .get_messages_filtered(&id, since, limit, from)
+        .await;
     if !existing.is_empty() {
-        return (
-            StatusCode::OK,
-            Json(WaitResponse {
-                messages: existing,
-                timeout: false,
-                timeout_after: None,
-                closed: false,
-            }),
-        )
-            .into_response();
+        return (StatusCode::OK, Json(wrap_wait(existing, false, None, false))).into_response();
     }
 
     let session = state.store.get_session(&id).await;
@@ -177,12 +198,7 @@ async fn wait_for_message(
         Some(s) if s.closed => {
             return (
                 StatusCode::OK,
-                Json(WaitResponse {
-                    messages: vec![],
-                    timeout: false,
-                    timeout_after: None,
-                    closed: true,
-                }),
+                Json(wrap_wait(vec![], false, None, true)),
             )
                 .into_response();
         }
@@ -217,30 +233,28 @@ async fn wait_for_message(
             match rx.recv().await {
                 Ok(DaemonEvent::NewMessage(msg)) => {
                     if msg.id > since {
-                        return WaitResponse {
-                            messages: vec![msg],
-                            timeout: false,
-                            timeout_after: None,
-                            closed: false,
+                        if let Some(sender) = from {
+                            if msg.sender != sender {
+                                continue;
+                            }
+                        }
+                        let msgs = if limit.unwrap_or(1) > 1 {
+                            state
+                                .store
+                                .get_messages_filtered(&id, since, limit, from)
+                                .await
+                        } else {
+                            vec![msg]
                         };
+                        return wrap_wait(msgs, false, None, false);
                     }
                 }
                 Ok(DaemonEvent::SessionClosed) => {
-                    return WaitResponse {
-                        messages: vec![],
-                        timeout: false,
-                        timeout_after: None,
-                        closed: true,
-                    };
+                    return wrap_wait(vec![], false, None, true);
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(broadcast::error::RecvError::Closed) => {
-                    return WaitResponse {
-                        messages: vec![],
-                        timeout: false,
-                        timeout_after: None,
-                        closed: true,
-                    };
+                    return wrap_wait(vec![], false, None, true);
                 }
             }
         }
@@ -251,32 +265,109 @@ async fn wait_for_message(
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
         Err(_elapsed) => (
             StatusCode::OK,
-            Json(WaitResponse {
-                messages: vec![],
-                timeout: true,
-                timeout_after: Some(wait_timeout),
-                closed: false,
-            }),
+            Json(wrap_wait(vec![], true, Some(wait_timeout), false)),
         )
             .into_response(),
     }
 }
 
-async fn recap_session(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+async fn recap_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(params): Query<RecapQuery>,
+) -> impl IntoResponse {
+    let session = match state.store.get_session(&id).await {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("session '{}' not found", id),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let since = params.since.unwrap_or(0);
+    let messages = state
+        .store
+        .get_messages_filtered(&id, since, params.limit, None)
+        .await;
+    let cursor = compute_cursor(&messages);
+
+    (
+        StatusCode::OK,
+        Json(RecapResponse {
+            session,
+            messages,
+            cursor,
+        }),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct EventsParams {
+    since: Option<u64>,
+}
+
+async fn stream_events(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(params): Query<EventsParams>,
+) -> impl IntoResponse {
+    let since = params.since.unwrap_or(0);
+
     let session = state.store.get_session(&id).await;
     match session {
-        Some(session) => {
-            let messages = state.store.get_all_messages(&id).await;
-            (StatusCode::OK, Json(RecapResponse { session, messages })).into_response()
+        Some(s) if s.closed => {
+            let event: Result<Event, Infallible> = Ok(Event::default().data("{\"event\":\"closed\"}"));
+            return (StatusCode::OK, Sse::new(stream::iter(vec![event]))).into_response();
         }
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("session '{}' not found", id),
-            }),
-        )
-            .into_response(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("session '{}' not found", id),
+                }),
+            )
+                .into_response();
+        }
+        _ => {}
     }
+
+    let rx = match state.store.subscribe(&id).await {
+        Some(rx) => rx,
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "failed to subscribe".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let stream = BroadcastStream::new(rx).filter_map(move |result| {
+        match result {
+            Ok(DaemonEvent::NewMessage(msg)) => {
+                if msg.id > since {
+                    let data = serde_json::to_string(&msg).unwrap_or_default();
+                    Some(Ok::<_, Infallible>(Event::default().event("message").data(data)))
+                } else {
+                    None
+                }
+            }
+            Ok(DaemonEvent::SessionClosed) => {
+                Some(Ok::<_, Infallible>(Event::default().event("closed").data("{}")))
+            }
+            Err(_) => None,
+        }
+    });
+
+    (StatusCode::OK, Sse::new(stream)).into_response()
 }
 
 async fn status(State(state): State<AppState>) -> impl IntoResponse {
