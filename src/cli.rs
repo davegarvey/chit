@@ -132,6 +132,12 @@ pub enum SessionCommands {
         #[arg(long, short = 'j')]
         json: bool,
     },
+    Rename {
+        session_id: String,
+        name: String,
+        #[arg(long, short = 'j')]
+        json: bool,
+    },
 }
 
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
@@ -159,6 +165,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             SessionCommands::List { json } => cmd_list(json).await,
             SessionCommands::Close { session_id, json } => cmd_close(Some(session_id), json).await,
             SessionCommands::Show { session_id, json } => cmd_session_show(session_id, json).await,
+            SessionCommands::Rename { session_id, name, json } => cmd_session_rename(session_id, name, json).await,
         },
     }
 }
@@ -606,9 +613,33 @@ async fn cmd_session_show(session_id: String, json_output: bool) -> anyhow::Resu
         println!("{}", serde_json::to_string(&session).unwrap());
     } else {
         println!("Session: {}", session.id);
+        if let Some(ref n) = session.name {
+            println!("  Name: {}", n);
+        }
         println!("  Created: {}", session.created_at.format("%Y-%m-%d %H:%M:%S"));
         println!("  Last activity: {}", session.last_activity.format("%Y-%m-%d %H:%M:%S"));
         println!("  Status: {}", if session.closed { "closed" } else { "active" });
+    }
+    Ok(())
+}
+
+async fn cmd_session_rename(session_id: String, name: String, json_output: bool) -> anyhow::Result<()> {
+    let (host, port) = ensure_daemon_running().await?;
+
+    let client = reqwest::Client::new();
+    let url = daemon_url(&host, port, &format!("/api/sessions/{}/rename", session_id));
+    let resp = client.post(&url).json(&json!({"name": name})).send().await?;
+
+    if !resp.status().is_success() {
+        let err: ErrorResponse = resp.json().await?;
+        fail(json_output, &err.error, "RENAME_ERROR");
+    }
+
+    let result: serde_json::Value = resp.json().await?;
+    if json_output {
+        println!("{}", serde_json::to_string(&result).unwrap());
+    } else {
+        println!("Session {} renamed to '{}'", session_id, result["name"]);
     }
     Ok(())
 }

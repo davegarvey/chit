@@ -39,6 +39,7 @@ pub fn create_router(store: Arc<Store>) -> Router {
         )
         .route("/api/sessions/:id/wait", get(wait_for_message))
         .route("/api/sessions/:id/recap", get(recap_session))
+        .route("/api/sessions/:id/rename", post(rename_session))
         .route("/api/sessions/:id/events", get(stream_events))
         .route("/api/status", get(status))
         .layer(tower_http::cors::CorsLayer::permissive())
@@ -307,6 +308,28 @@ async fn recap_session(
         }),
     )
         .into_response()
+}
+
+async fn rename_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<RenameSessionRequest>,
+) -> impl IntoResponse {
+    if state.store.rename_session(&id, &req.name).await {
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({"session_id": id, "name": req.name, "status": "renamed"})),
+        )
+            .into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("session '{}' not found", id),
+            }),
+        )
+            .into_response()
+    }
 }
 
 #[derive(Deserialize)]

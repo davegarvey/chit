@@ -13,9 +13,16 @@ pub struct DaemonInfo {
 pub struct Session {
     #[serde(rename = "session_id")]
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub created_at: DateTime<Utc>,
     pub last_activity: DateTime<Utc>,
     pub closed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenameSessionRequest {
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +84,8 @@ pub struct RecapResponse {
 pub struct SessionSummary {
     #[serde(rename = "session_id")]
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub created_at: DateTime<Utc>,
     pub closed: bool,
     pub message_count: usize,
@@ -124,6 +133,7 @@ mod tests {
         let now = Utc::now();
         let session = Session {
             id: "sess_test".into(),
+            name: None,
             created_at: now,
             last_activity: now,
             closed: false,

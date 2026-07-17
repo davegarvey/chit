@@ -59,6 +59,7 @@ impl Store {
         let now = Utc::now();
         let session = Session {
             id: id.clone(),
+            name: None,
             created_at: now,
             last_activity: now,
             closed: false,
@@ -173,11 +174,22 @@ impl Store {
             .values()
             .map(|s| SessionSummary {
                 id: s.id.clone(),
+                name: s.name.clone(),
                 created_at: s.created_at,
                 closed: s.closed,
                 message_count: msgs.get(&s.id).map(|v| v.len()).unwrap_or(0),
             })
             .collect()
+    }
+
+    pub async fn rename_session(&self, session_id: &str, name: &str) -> bool {
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.name = Some(name.to_string());
+            true
+        } else {
+            false
+        }
     }
 
     pub async fn close_session(&self, session_id: &str) -> bool {
