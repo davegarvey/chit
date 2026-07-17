@@ -1505,6 +1505,11 @@ fn test_rename_rejects_overwrite_without_force() {
     let home = tempfile::tempdir().unwrap();
     let sess = chit_start(home.path());
 
+    chit_ok(
+        home.path(),
+        &["session", "rename", &sess, "original-name", "--force"],
+    );
+
     let (_stdout, stderr, ok) = chit(home.path(), &["session", "rename", &sess, "new-name"]);
     assert!(
         !ok,
@@ -1524,9 +1529,14 @@ fn test_rename_noop_same_name() {
     let home = tempfile::tempdir().unwrap();
     let sess = chit_start(home.path());
 
+    chit_ok(
+        home.path(),
+        &["session", "rename", &sess, "test-name", "--force"],
+    );
+
     let (_stdout, _stderr, ok) = chit(
         home.path(),
-        &["session", "rename", &sess, "chit", "--force"],
+        &["session", "rename", &sess, "test-name", "--force"],
     );
     assert!(ok, "rename to same name with --force should succeed");
 
