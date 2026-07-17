@@ -41,29 +41,61 @@ pub enum Commands {
         /// Override sender name
         #[arg(long = "as", name = "sender_name")]
         sender_name: Option<String>,
-    },
-    /// Wait for the next message in a session
-    Wait {
-        /// Session ID (auto-targets if single session exists)
-        session: Option<String>,
-        /// Timeout in seconds
+        /// Output in JSON format
+        #[arg(long, short = 'j')]
+        json: bool,
+        /// Timeout in seconds when waiting for reply (blocking mode only)
         #[arg(long)]
         timeout: Option<u64>,
     },
+    /// Wait for the next message in a session
+    Wait {
+        /// Session ID (positional, for backwards compatibility)
+        session: Option<String>,
+        /// Session ID
+        #[arg(long, short, conflicts_with = "session")]
+        session_id: Option<String>,
+        /// Timeout in seconds
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// Only return messages with ID greater than this value
+        #[arg(long)]
+        since: Option<u64>,
+        /// Output in JSON format
+        #[arg(long, short = 'j')]
+        json: bool,
+    },
     /// Show full conversation transcript
     Recap {
-        /// Session ID (auto-targets if single session exists)
+        /// Session ID (positional, for backwards compatibility)
         session: Option<String>,
+        /// Session ID
+        #[arg(long, short, conflicts_with = "session")]
+        session_id: Option<String>,
+        /// Output in JSON format
+        #[arg(long, short = 'j')]
+        json: bool,
     },
     /// List active sessions
-    List,
+    List {
+        /// Output in JSON format
+        #[arg(long, short = 'j')]
+        json: bool,
+    },
     /// Close a session
     Close {
-        /// Session ID (auto-targets if single session exists)
+        /// Session ID (positional, for backwards compatibility)
         session: Option<String>,
+        /// Session ID
+        #[arg(long, short, conflicts_with = "session")]
+        session_id: Option<String>,
     },
     /// Show daemon status
-    Status,
+    Status {
+        /// Output in JSON format
+        #[arg(long, short = 'j')]
+        json: bool,
+    },
     /// Stop the daemon
     Stop,
     /// Run the daemon server (internal)
@@ -80,12 +112,27 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             session,
             ff,
             sender_name,
-        } => cmd_send(session, &message, ff, sender_name.as_deref()).await,
-        Commands::Wait { session, timeout } => cmd_wait(session, timeout).await,
-        Commands::Recap { session } => cmd_recap(session).await,
-        Commands::List => cmd_list().await,
-        Commands::Close { session } => cmd_close(session).await,
-        Commands::Status => cmd_status().await,
+            json,
+            timeout,
+        } => cmd_send(session, &message, ff, sender_name.as_deref(), json, timeout).await,
+        Commands::Wait {
+            session,
+            session_id,
+            timeout,
+            since,
+            json,
+        } => cmd_wait(session.or(session_id), timeout, since, json).await,
+        Commands::Recap {
+            session,
+            session_id,
+            json,
+        } => cmd_recap(session.or(session_id), json).await,
+        Commands::List { json } => cmd_list(json).await,
+        Commands::Close {
+            session,
+            session_id,
+        } => cmd_close(session.or(session_id)).await,
+        Commands::Status { json } => cmd_status(json).await,
         Commands::Stop => cmd_stop().await,
         Commands::Daemon => crate::daemon::run_daemon().await,
     }
@@ -254,7 +301,7 @@ async fn cmd_start(message: Option<String>) -> anyhow::Result<()> {
     println!("{}", session.id);
 
     if message.is_some() {
-        cmd_wait(Some(session.id.clone()), None).await?;
+        cmd_wait(Some(session.id.clone()), None, None, false).await?;
     }
 
     Ok(())
@@ -265,6 +312,8 @@ async fn cmd_send(
     content: &str,
     fire_and_forget: bool,
     sender_override: Option<&str>,
+    json_output: bool,
+    chat_timeout: Option<u64>,
 ) -> anyhow::Result<()> {
     let (host, port) = ensure_daemon_running().await?;
     let session_id = resolve_session_id(&host, port, session_arg.as_deref(), "send").await?;
@@ -292,18 +341,26 @@ async fn cmd_send(
     let msg: SendMessageResponse = resp.json().await?;
 
     if fire_and_forget {
+        if json_output {
+            println!("{}", serde_json::to_string(&msg).unwrap());
+        }
         return Ok(());
     }
 
-    let wait_url = daemon_url(
-        &host,
-        port,
-        &format!("/api/sessions/{}/wait?since={}", session_id, msg.id),
+    let mut wait_url = format!(
+        "/api/sessions/{}/wait?since={}",
+        session_id, msg.id
     );
+    if let Some(to) = chat_timeout {
+        wait_url = format!("{}&timeout_secs={}", wait_url, to);
+    }
+    let wait_url = daemon_url(&host, port, &wait_url);
     let wait_resp = client.get(&wait_url).send().await?;
     let result: WaitResponse = wait_resp.json().await?;
 
-    if result.closed {
+    if json_output {
+        println!("{}", serde_json::to_string(&result).unwrap());
+    } else if result.closed {
         println!("[session closed]");
     } else if result.timeout {
         println!(
@@ -319,28 +376,42 @@ async fn cmd_send(
     Ok(())
 }
 
-async fn cmd_wait(session_arg: Option<String>, timeout_secs: Option<u64>) -> anyhow::Result<()> {
+async fn cmd_wait(
+    session_arg: Option<String>,
+    timeout_secs: Option<u64>,
+    since: Option<u64>,
+    json_output: bool,
+) -> anyhow::Result<()> {
     let (host, port) = ensure_daemon_running().await?;
     let session_id = resolve_session_id(&host, port, session_arg.as_deref(), "wait").await?;
 
     let config = store::read_user_config().await;
     let default_timeout = config["default_timeout"].as_u64().unwrap_or(300);
     let wait_timeout = timeout_secs.unwrap_or(default_timeout);
+    let since_id = since.unwrap_or(0);
 
     let client = reqwest::Client::new();
     let url = daemon_url(
         &host,
         port,
         &format!(
-            "/api/sessions/{}/wait?since=0&timeout_secs={}",
-            session_id, wait_timeout
+            "/api/sessions/{}/wait?since={}&timeout_secs={}",
+            session_id, since_id, wait_timeout
         ),
     );
 
     let resp = client.get(&url).send().await?;
+
+    if !resp.status().is_success() {
+        let err: ErrorResponse = resp.json().await?;
+        bail!("{}", err.error);
+    }
+
     let result: WaitResponse = resp.json().await?;
 
-    if result.closed {
+    if json_output {
+        println!("{}", serde_json::to_string(&result).unwrap());
+    } else if result.closed {
         println!("[session closed]");
     } else if result.timeout {
         println!(
@@ -362,37 +433,47 @@ async fn cmd_wait(session_arg: Option<String>, timeout_secs: Option<u64>) -> any
     Ok(())
 }
 
-async fn cmd_recap(session_arg: Option<String>) -> anyhow::Result<()> {
+async fn cmd_recap(session_arg: Option<String>, json_output: bool) -> anyhow::Result<()> {
     let (host, port) = ensure_daemon_running().await?;
     let session_id = resolve_session_id(&host, port, session_arg.as_deref(), "recap").await?;
 
     let client = reqwest::Client::new();
     let url = daemon_url(&host, port, &format!("/api/sessions/{}/recap", session_id));
     let resp = client.get(&url).send().await?;
+
+    if !resp.status().is_success() {
+        let err: ErrorResponse = resp.json().await?;
+        bail!("{}", err.error);
+    }
+
     let recap: RecapResponse = resp.json().await?;
 
-    println!(
-        "session: {}  |  created: {}  |  closed: {}",
-        recap.session.id,
-        recap.session.created_at.format("%Y-%m-%d %H:%M:%S"),
-        recap.session.closed,
-    );
-    println!();
-
-    for msg in &recap.messages {
+    if json_output {
+        println!("{}", serde_json::to_string(&recap).unwrap());
+    } else {
         println!(
-            "[{}] {} ({}):\n    {}\n",
-            msg.id,
-            msg.sender,
-            msg.timestamp.format("%H:%M:%S"),
-            msg.content,
+            "session: {}  |  created: {}  |  closed: {}",
+            recap.session.id,
+            recap.session.created_at.format("%Y-%m-%d %H:%M:%S"),
+            recap.session.closed,
         );
+        println!();
+
+        for msg in &recap.messages {
+            println!(
+                "[{}] {} ({}):\n    {}\n",
+                msg.id,
+                msg.sender,
+                msg.timestamp.format("%H:%M:%S"),
+                msg.content,
+            );
+        }
     }
 
     Ok(())
 }
 
-async fn cmd_list() -> anyhow::Result<()> {
+async fn cmd_list(json_output: bool) -> anyhow::Result<()> {
     let (host, port) = ensure_daemon_running().await?;
 
     let client = reqwest::Client::new();
@@ -400,7 +481,9 @@ async fn cmd_list() -> anyhow::Result<()> {
     let resp = client.get(&url).send().await?;
     let sessions: Vec<SessionSummary> = resp.json().await?;
 
-    if sessions.is_empty() {
+    if json_output {
+        println!("{}", serde_json::to_string(&sessions).unwrap());
+    } else if sessions.is_empty() {
         println!("No active sessions");
     } else {
         for s in &sessions {
@@ -431,18 +514,26 @@ async fn cmd_close(session_arg: Option<String>) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn cmd_status() -> anyhow::Result<()> {
+async fn cmd_status(json_output: bool) -> anyhow::Result<()> {
     match store::read_daemon_json().await {
         Ok(info) => {
-            println!("daemon running:");
-            println!("  PID:  {}", info.pid);
-            println!("  Port: {}", info.port);
-            println!("  Host: {}", info.host);
-            println!("  Since: {}", info.started_at.format("%Y-%m-%d %H:%M:%S"));
+            if json_output {
+                println!("{}", serde_json::to_string(&info).unwrap());
+            } else {
+                println!("daemon running:");
+                println!("  PID:  {}", info.pid);
+                println!("  Port: {}", info.port);
+                println!("  Host: {}", info.host);
+                println!("  Since: {}", info.started_at.format("%Y-%m-%d %H:%M:%S"));
+            }
             Ok(())
         }
         Err(_) => {
-            println!("no daemon running");
+            if json_output {
+                println!("{}", serde_json::json!({"running": false}));
+            } else {
+                println!("no daemon running");
+            }
             Ok(())
         }
     }
