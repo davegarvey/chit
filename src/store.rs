@@ -345,6 +345,25 @@ pub async fn clear_active_session() -> anyhow::Result<()> {
     Ok(())
 }
 
+pub fn local_cursor_path() -> PathBuf {
+    PathBuf::from(".tala").join("cursor")
+}
+
+pub async fn read_cursor() -> u64 {
+    let path = local_cursor_path();
+    match tokio::fs::read_to_string(&path).await {
+        Ok(content) => content.trim().parse().unwrap_or(0),
+        Err(_) => 0,
+    }
+}
+
+pub async fn write_cursor(cursor: u64) -> anyhow::Result<()> {
+    let path = local_cursor_path();
+    tokio::fs::create_dir_all(path.parent().unwrap()).await?;
+    tokio::fs::write(&path, cursor.to_string()).await?;
+    Ok(())
+}
+
 pub async fn read_project_config() -> Option<String> {
     let path = local_config_path();
     let content = tokio::fs::read_to_string(&path).await.ok()?;

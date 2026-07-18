@@ -1,47 +1,33 @@
 ## Context
 
-The cross-project eval identified four P1 UX issues in tala 0.25.0's core CLI. The commands `watch`, `wait`, `send --wait`, and `listen` form a family of related but distinct operations (SSE stream, long-poll, send+long-poll, multi-session SSE). Their names don't convey the differences, and two of them (`send --wait`, `watch`) can fail silently with no output during normal operation.
+Tala uses a file-based cursor system via `.tala/active-session` for tracking the active session per project directory. The `daemon.json` file stores the daemon's host/port. Currently, connection failures produce raw `reqwest` errors (e.g., "connection refused") without indicating which path or `TALA_HOME` value was used. Session listings show total message counts but no new/unread differentiation. There is no lightweight non-blocking command for polling new messages — agents must use `tala wait` (blocking long-poll) or `tala recap` (full transcript).
 
 ## Goals / Non-Goals
 
 **Goals:**
-- Rename `tala watch` to `tala stream` (canonical name), demote `watch` to hidden deprecated alias
-- Show progress heartbeat during `tala send --wait` long-poll (repeat timeout + spinner)
-- Print a notice when `tala stream --timeout N` exits with no messages (not silent)
-- Improve `tala observe` deprecation to error-level stderr message
-- Update help text descriptions for `listen` and `stream` to clarify one-session vs all-sessions
-- Improve `tala send` error when `--stdin` is missing to mention the flag by name
-- Fix `tala status` to verify daemon liveliness via HTTP health check, not just file presence
-- Make `tala session rename` idempotent (rename without `--force` just works)
+- Add diagnostic information (path, TALA_HOME) to daemon connection errors
+- Add unread counts to `tala list` and `tala status`
+- Add active session marker (`*`) to `tala list`
+- Add `tala whatsup` command for non-blocking incremental message poll
+- Per-project cursor persistence at `.tala/cursor`, shared across `whatsup` and unread tracking
 
 **Non-Goals:**
-- Renaming `tala wait` (different semantics from stream — long-poll, not SSE)
-- Making `--wait` the default for `tala send` (design preference, not a bug)
-- Renaming `tala chat`/`tala send` alias pair
+- Server-side per-agent cursor tracking (keeping it client-side avoids state complexity)
+- Push notifications or real-time unread updates
+- UI-level changes beyond CLI text/JSON output
 
 ## Decisions
 
-### Rename `watch` → `stream`
-- **Why `stream`**: The command produces an SSE event stream. `stream` is a well-known term for this pattern. The old name `watch` overlaps semantically with `wait` (both imply "block and observe"). Status-quo alternative `tala events` was considered but `stream` is shorter and maps to the SSE transport directly.
-- **Deprecation pattern**: Follow the same pattern as `observe`→`listen`: `watch` becomes `#[command(hide = true)]`, `stream` becomes the public name with `#[command(alias = "watch")]`.
+1. **Client-side cursor, not server-side**: The cursor file (`.tala/cursor`) is stored per project directory, matching the existing pattern of `.tala/active-session`. Server-side per-agent cursors would require agent identity tracking and more complex state management. The client-side approach is simpler and sufficient for the eval use case. The trade-off is that cursor is per-project, not per-agent-identity.
 
-### Heartbeat for `tala send --wait`
-- **Approach**: The current code does a single long-poll GET and blocks. Instead, split the wait into multiple shorter polls (e.g., 30s chunks) with a spinner dot printed between each retry. This prevents the HTTP connection from looking hung and gives progressive feedback.
-- **Alternative**: SSE-based wait. Rejected because the `/wait` endpoint already works and is simpler — we just need the client to not appear frozen.
+2. **`tala whatsup` as a new top-level command**: Fits the existing command structure pattern. Alternative considered: adding `--since` to `tala list`. Rejected because `list` shows session metadata, not message content. The `whatsup` name fills the gap between `tala wait` (blocking) and `tala recap` (full history).
 
-### Watch empty output
-- **Approach**: In `cmd_watch`, when the SSE stream ends without producing any message events (only possible events: closed, message, or end-of-stream), print a notice. In text mode: `[no messages received]`. In JSON mode: output an empty JSON array `[]`.
-- **Detection**: Track whether any message event was received. After the loop, if count is 0, emit the notice.
+3. **Reusing the observe endpoint for `whatsup`**: The existing `/api/observe?since=N` endpoint already returns all messages across all sessions since a cursor. With `timeout_secs=0` the daemon can return immediately. Alternative: creating a dedicated `/api/whats-new` endpoint. Rejected to keep API surface minimal — the observe endpoint is a superset.
 
-### Status health check
-- **Approach**: In `cmd_status`, after reading `daemon.json`, make a GET request to `http://{host}:{port}/api/status`. If the request fails, report "daemon not running (stale daemon.json)" instead of "daemon running". This prevents false "daemon running" reports when the daemon has crashed but left its marker file.
-- **No daemon.json**: Report "no daemon running" as before (status is inspection-only, does not auto-start).
-
-### Session rename idempotent
-- **Approach**: Remove the `force` requirement: `rename_session` in `store.rs` will allow renaming a session regardless of whether it already has a name. The `--force` flag is kept in the CLI for backward compatibility but is ignored.
-- **Rationale**: Renaming is an explicit user action — requiring `--force` to perform a rename is surprising and counterintuitive. The operation is already reversible (user can rename again).
+4. **Unread counts computed from cursor**: Rather than adding new daemon state, unread counts are computed client-side: total messages per session minus messages up to cursor. The daemon returns `message_count` in `SessionSummary` — the CLI computes `unread_count = message_count - messages_seen_count`. Alternative: daemon computes unread per session using per-project cursors. Rejected for simplicity — client-side computation matches the cursor approach.
 
 ## Risks / Trade-offs
 
-- Renaming `watch` to `stream` is a breaking change for scripts. Mitigated by keeping `watch` as a deprecated alias (with a deprecation warning) for the next several releases.
-- The `observe` → `listen` rename already went through this; the new pattern is established.
+- [Cursor staleness] If the cursor file is deleted, all messages become "unread" again → Acceptable; same as first-time behavior
+- [Performance for many sessions] `tala whatsup` fetches all messages since cursor across all sessions → Acceptable for typical eval scenarios; if performance becomes an issue, pagination can be added later
+- [Cursor shared between whatsup and list] `tala list` updating the cursor could interfere with whatsup expectations → Mitigation: only `tala whatsup` updates the cursor; `tala list` reads it but does not advance it

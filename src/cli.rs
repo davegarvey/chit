@@ -257,6 +257,11 @@ pub enum Commands {
         #[arg(long, short = 'j', help = "Output in JSON format")]
         json: bool,
     },
+    /// Show new messages since last check (non-blocking)
+    WhatsUp {
+        #[arg(long, short = 'j', help = "Output in JSON format")]
+        json: bool,
+    },
     /// List all sessions
     List {
         #[arg(long, short = 'j', help = "Output in JSON format")]
@@ -480,6 +485,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             json,
             quiet,
         } => cmd_close(session.or(session_arg), json, quiet).await,
+        Commands::WhatsUp { json } => cmd_whatsup(json).await,
         Commands::Status { json } => cmd_status(json).await,
         Commands::Stop => cmd_stop().await,
         Commands::Daemon => crate::daemon::run_daemon().await,
@@ -502,10 +508,34 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     }
 }
 
+fn daemon_home_display() -> String {
+    let path = store::tala_home();
+    if let Ok(th) = std::env::var("TALA_HOME") {
+        format!("{} (from TALA_HOME={})", path.display(), th)
+    } else {
+        path.display().to_string()
+    }
+}
+
 async fn ensure_daemon_running() -> anyhow::Result<(String, u16)> {
     match store::read_daemon_json().await {
-        Ok(info) => Ok((info.host, info.port)),
+        Ok(info) => {
+            let alive = reqwest::Client::new()
+                .get(format!("http://{}:{}/api/status", info.host, info.port))
+                .send()
+                .await
+                .map(|r| r.status().is_success())
+                .unwrap_or(false);
+            if !alive {
+                bail!(
+                    "daemon.json found at {}/daemon.json but daemon is not reachable (may have crashed). Try `tala stop` then run your command again.",
+                    daemon_home_display()
+                );
+            }
+            Ok((info.host, info.port))
+        }
         Err(_) => {
+            let home = daemon_home_display();
             std::process::Command::new(std::env::current_exe()?)
                 .arg("daemon")
                 .stdout(std::process::Stdio::null())
@@ -521,7 +551,7 @@ async fn ensure_daemon_running() -> anyhow::Result<(String, u16)> {
                 }
             }
 
-            bail!("daemon failed to start within 5 seconds");
+            bail!("daemon failed to start within 5 seconds (looked for daemon.json at {}/daemon.json)", home);
         }
     }
 }
@@ -1470,10 +1500,26 @@ async fn cmd_list(json_output: bool) -> anyhow::Result<()> {
     let resp = client.get(&url).send().await?;
     let sessions: Vec<SessionSummary> = resp.json().await?;
 
+    let cursor = store::read_cursor().await;
+    let active_session = store::read_active_session().await;
+
     if json_output {
-        println!("{}", serde_json::to_string(&sessions).unwrap());
+        let mut enriched: Vec<serde_json::Value> = Vec::new();
+        for s in &sessions {
+            let unread = compute_session_unread(&host, port, s, cursor).await;
+            let mut entry = serde_json::to_value(s).unwrap_or_default();
+            if let Some(obj) = entry.as_object_mut() {
+                obj.insert("unread_count".to_string(), serde_json::json!(unread));
+                obj.insert(
+                    "active".to_string(),
+                    serde_json::json!(active_session.as_deref() == Some(&s.id)),
+                );
+            }
+            enriched.push(entry);
+        }
+        println!("{}", serde_json::to_string(&enriched).unwrap());
     } else if sessions.is_empty() {
-        println!("No active sessions");
+        println!("No sessions");
     } else {
         let name_width = sessions
             .iter()
@@ -1484,17 +1530,58 @@ async fn cmd_list(json_output: bool) -> anyhow::Result<()> {
         for s in &sessions {
             let status = if s.closed { "closed" } else { "active" };
             let name = s.name.as_deref().unwrap_or("-");
-            println!(
-                "{}  {:width$}  {}  {} msgs",
-                s.id,
-                name,
-                status,
-                s.message_count,
-                width = name_width
-            );
+            let unread = compute_session_unread(&host, port, s, cursor).await;
+            let marker = if active_session.as_deref() == Some(&s.id) {
+                " *"
+            } else {
+                "  "
+            };
+            if unread > 0 {
+                println!(
+                    "{}  {:width$}  {}  {} msgs ({} new){}",
+                    s.id,
+                    name,
+                    status,
+                    s.message_count,
+                    unread,
+                    marker,
+                    width = name_width
+                );
+            } else {
+                println!(
+                    "{}  {:width$}  {}  {} msgs{}",
+                    s.id,
+                    name,
+                    status,
+                    s.message_count,
+                    marker,
+                    width = name_width
+                );
+            }
         }
     }
     Ok(())
+}
+
+async fn compute_session_unread(
+    host: &str,
+    port: u16,
+    session: &SessionSummary,
+    cursor: u64,
+) -> usize {
+    if cursor == 0 && session.message_count == 0 {
+        return 0;
+    }
+    let client = reqwest::Client::new();
+    let msgs_url = daemon_url(
+        host,
+        port,
+        &format!("/api/sessions/{}/messages?since={}", session.id, cursor),
+    );
+    match client.get(&msgs_url).send().await {
+        Ok(resp) => resp.json::<Vec<Message>>().await.unwrap_or_default().len(),
+        Err(_) => 0,
+    }
 }
 
 async fn cmd_agents(json_output: bool) -> anyhow::Result<()> {
@@ -1685,10 +1772,12 @@ async fn cmd_status(json_output: bool) -> anyhow::Result<()> {
     let info = match store::read_daemon_json().await {
         Ok(info) => info,
         Err(_) => {
+            let home = daemon_home_display();
             if json_output {
-                println!("{}", serde_json::json!({"running": false}));
+                println!("{}", serde_json::json!({"running": false, "home": home}));
             } else {
-                println!("no daemon running");
+                println!("no daemon running (checked {}/daemon.json)", home);
+                println!("Start the daemon by running any tala command, or set TALA_HOME if using a custom location");
             }
             return Ok(());
         }
@@ -1703,23 +1792,147 @@ async fn cmd_status(json_output: bool) -> anyhow::Result<()> {
         .unwrap_or(false);
 
     if alive {
+        let cursor = store::read_cursor().await;
+        let total_unread = compute_total_unread(&info.host, info.port, cursor).await;
+
         if json_output {
-            println!("{}", serde_json::to_string(&info).unwrap());
+            let resp = serde_json::json!({
+                "running": true,
+                "pid": info.pid,
+                "port": info.port,
+                "host": info.host,
+                "started_at": info.started_at,
+                "total_unread": total_unread,
+            });
+            println!("{}", serde_json::to_string(&resp).unwrap());
         } else {
             println!("daemon running:");
             println!("  PID:  {}", info.pid);
             println!("  Port: {}", info.port);
             println!("  Host: {}", info.host);
             println!("  Since: {}", info.started_at.format("%Y-%m-%d %H:%M:%S"));
+            if total_unread > 0 {
+                println!(
+                    "  Unread: {} new message(s) across all sessions",
+                    total_unread
+                );
+            } else {
+                println!("  Unread: 0 new messages");
+            }
         }
-    } else if json_output {
-        println!(
-            "{}",
-            serde_json::json!({"running": false, "stale_daemon_json": true})
-        );
     } else {
-        println!("daemon.json found but daemon is not reachable (may have crashed)");
+        let home = daemon_home_display();
+        if json_output {
+            println!(
+                "{}",
+                serde_json::json!({"running": false, "stale_daemon_json": true, "home": home})
+            );
+        } else {
+            println!("daemon.json found at {}/daemon.json but daemon is not reachable (may have crashed)", home);
+            println!("Try `tala stop` to clean up stale daemon.json, then run your command again.");
+        }
     }
+    Ok(())
+}
+
+async fn compute_total_unread(host: &str, port: u16, cursor: u64) -> usize {
+    let client = reqwest::Client::new();
+    let url = daemon_url(host, port, "/api/sessions");
+    match client.get(&url).send().await {
+        Ok(resp) => {
+            let sessions: Vec<SessionSummary> = resp.json().await.unwrap_or_default();
+            let mut total = 0;
+            for s in &sessions {
+                let msgs_url = daemon_url(
+                    host,
+                    port,
+                    &format!("/api/sessions/{}/messages?since={}", s.id, cursor),
+                );
+                if let Ok(resp) = client.get(&msgs_url).send().await {
+                    if let Ok(msgs) = resp.json::<Vec<Message>>().await {
+                        total += msgs.len();
+                    }
+                }
+            }
+            total
+        }
+        Err(_) => 0,
+    }
+}
+
+async fn cmd_whatsup(json_output: bool) -> anyhow::Result<()> {
+    let (host, port) = ensure_daemon_running().await?;
+    let cursor = store::read_cursor().await;
+    let client = reqwest::Client::new();
+
+    let url = daemon_url(&host, port, "/api/sessions");
+    let resp = client.get(&url).send().await?;
+    let sessions: Vec<SessionSummary> = resp.json().await?;
+
+    let mut all_messages: Vec<Message> = Vec::new();
+
+    for s in &sessions {
+        let msgs_url = daemon_url(
+            &host,
+            port,
+            &format!("/api/sessions/{}/messages?since={}", s.id, cursor),
+        );
+        if let Ok(resp) = client.get(&msgs_url).send().await {
+            if let Ok(msgs) = resp.json::<Vec<Message>>().await {
+                all_messages.extend(msgs);
+            }
+        }
+    }
+
+    all_messages.sort_by_key(|m| m.id);
+
+    let new_cursor = all_messages.iter().map(|m| m.id).max().unwrap_or(cursor);
+
+    if json_output {
+        let result = serde_json::json!({
+            "cursor": new_cursor,
+            "messages": all_messages,
+        });
+        println!("{}", serde_json::to_string(&result).unwrap());
+    } else if all_messages.is_empty() {
+        println!("No new messages since last check (cursor: {})", cursor);
+    } else {
+        // Group messages by session
+        let mut by_session: std::collections::BTreeMap<String, Vec<&Message>> =
+            std::collections::BTreeMap::new();
+        for msg in &all_messages {
+            by_session
+                .entry(msg.session_id.clone())
+                .or_default()
+                .push(msg);
+        }
+        for (sid, msgs) in &by_session {
+            // Find session name
+            let session_name = sessions
+                .iter()
+                .find(|s| s.id == *sid)
+                .and_then(|s| s.name.clone())
+                .unwrap_or_else(|| sid.clone());
+            println!("[{}] ({} new message(s))", session_name, msgs.len());
+            for msg in msgs {
+                println!(
+                    "  [{}] {} ({}):\n    {}",
+                    msg.id,
+                    msg.sender,
+                    msg.timestamp.format("%H:%M:%S"),
+                    msg.content
+                );
+            }
+            println!();
+        }
+    }
+
+    store::write_cursor(new_cursor).await?;
+
+    if !json_output && !all_messages.is_empty() {
+        println!("(cursor updated to {})", new_cursor);
+    }
+
     Ok(())
 }
 

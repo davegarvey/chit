@@ -255,7 +255,8 @@ phase_critique() {
 }
 
 phase_analyze() {
-  local loop_num="${1:-0}"
+  state_read
+  local loop_num="${LOOP:-0}"
   harness advance analyzing
 
   local loop_file="$AGENT_TASKS_DIR/$SCENARIO/critic-output-loop-${loop_num}.json"
@@ -287,7 +288,8 @@ phase_analyze() {
 }
 
 phase_implement() {
-  local loop_num="${1:-0}"
+  state_read
+  local loop_num="${LOOP:-0}"
   local change_name="eval-fix-loop-${loop_num}"
 
   if [ -d "openspec/changes/$change_name" ]; then
@@ -361,7 +363,8 @@ PROMPT
 }
 
 phase_finalize() {
-  local loop_num="${1:-0}"
+  state_read
+  local loop_num="${LOOP:-0}"
   local branch_name="eval-fix-loop-${loop_num}"
 
   cd "$SCRIPT_DIR/.."
@@ -444,13 +447,14 @@ main() {
 
   local loop_num=0
   while [ "$loop_num" -lt "$MAX_LOOPS" ]; do
-    print_loop_header "$loop_num" "$MAX_LOOPS"
+    state_read
+    print_loop_header "${LOOP:-0}" "$MAX_LOOPS"
 
     phase_setup
     phase_launch
     phase_collect
     phase_critique
-    phase_analyze "$loop_num"
+    phase_analyze
 
     if [ "${EXIT_CRITERIA_MET:-false}" = "true" ]; then
       phase_exit
@@ -458,8 +462,8 @@ main() {
     fi
 
     harness advance spec || true
-    phase_implement "$loop_num"
-    phase_finalize "$loop_num"
+    phase_implement
+    phase_finalize
     harness advance pr || true
 
     loop_num=$((loop_num + 1))

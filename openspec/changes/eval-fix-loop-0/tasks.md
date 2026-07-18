@@ -1,38 +1,28 @@
-## 1. Rename watch to stream
+## 1. Better Daemon Connectivity Errors
 
-- [x] 1.1 Change `Commands::Watch` primary name from `"watch"` to `"stream"`, add `alias = "watch"`, add deprecation handler that warns and delegates
-- [x] 1.2 Update `tala --help` long_about text to reference `tala stream` instead of `tala watch`
+- [ ] 1.1 Add path and TALA_HOME details to `ensure_daemon_running()` error messages in `cli.rs`
+- [ ] 1.2 Improve "no daemon running" text output in `cmd_status` to include path checked
+- [ ] 1.3 Add daemon unreachable diagnostic (stale daemon.json) to all commands via shared helper
 
-## 2. Stream non-empty on timeout
+## 2. Unread Indicators in List and Status
 
-- [x] 2.1 Add message counter to `cmd_watch`; after the SSE loop, emit `[no messages received]` (text) or `[]` (JSON) if zero messages arrived
+- [ ] 2.1 Add `tala_home_path()` helper to `store.rs` for consistent path display
+- [ ] 2.2 Add `.tala/cursor` read/write functions in `store.rs`
+- [ ] 2.3 Add `unread_count` to `SessionSummary` model and compute from cursor
+- [ ] 2.4 Add `active_session_id` to session list fetching for active session marker
+- [ ] 2.5 Update `cmd_list` text output to show unread count and active marker
+- [ ] 2.6 Update `cmd_status` to show total unread count
 
-## 3. Send --wait progress heartbeat
+## 3. Non-blocking `tala whatsup` Command
 
-- [x] 3.1 Split the single long-poll GET in `cmd_send` wait section into multiple shorter polls with a spinner dot printed between retries
+- [ ] 3.1 Add `WhatsUp` variant to `Commands` enum with clap args
+- [ ] 3.2 Add dispatch case in `run()` for `WhatsUp`
+- [ ] 3.3 Implement `cmd_whatsup()`: read cursor, query observe endpoint, display messages, write cursor
+- [ ] 3.4 Wire cursor I/O into `cmd_list` for unread computation
+- [ ] 3.5 Verify JSON output format for scripting use
 
-## 4. Observe deprecation visibility
+## 4. Verification
 
-- [x] 4.1 Bump `deprecation_warning("observe", "listen")` to use a stronger format (e.g., `"error:"` prefix or emphasized message)
-
-## 5. Listen help text clarity
-
-- [x] 5.1 Update `Commands::Listen` doc comment to include "all sessions" in the description
-- [x] 5.2 Update `tala --help` long_about to clarify listen (all sessions) vs stream (one session)
-
-## 6. Send missing stdin error hint
-
-- [x] 6.1 Add mention of `--stdin` to the error messages in `cmd_send` when no message source is found
-
-## 7. Fix tala status daemon health check
-
-- [x] 7.1 Modify `cmd_status` to HTTP-verify daemon is alive after reading daemon.json
-- [x] 7.2 When daemon.json is stale (file exists but HTTP fails), report accordingly
-- [x] 7.3 When daemon.json is missing, report "no daemon running" (no auto-start)
-- [x] 7.4 Update tests for status command
-
-## 8. Fix session rename idempotency
-
-- [x] 8.1 Remove `force` gate in `store.rs` `rename_session` — always allow rename regardless of existing name
-- [x] 8.2 Keep `--force` CLI flag as no-op for backward compatibility
-- [x] 8.3 Update tests: remove `--force` requirement from rename tests
+- [ ] 4.1 Build and check for compilation errors
+- [ ] 4.2 Run existing test suite
+- [ ] 4.3 Manual review of error message quality
