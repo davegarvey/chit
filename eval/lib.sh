@@ -37,9 +37,26 @@ msg() {
   fi
 }
 
+# --- Config file (user-set, persists across resets) ---
+# Path relative to BASE_DIR
+CONFIG_FILE="$BASE_DIR/.config.env"
+
+config_read() {
+  MODEL=""
+  VARIANT=""
+  if [ -f "$CONFIG_FILE" ]; then
+    while IFS='=' read -r key value; do
+      case "$key" in
+        MODEL) MODEL="$value" ;;
+        VARIANT) VARIANT="$value" ;;
+      esac
+    done < "$CONFIG_FILE"
+  fi
+}
+
 # --- State file (env-var format, line-by-line parse, NOT sourced) ---
 
-STATE_KEYS=(HARNESS_VERSION STATE SCENARIO LOOP MAX_LOOPS HARNESS_PID MODEL VARIANT)
+STATE_KEYS=(HARNESS_VERSION STATE SCENARIO LOOP MAX_LOOPS HARNESS_PID)
 
 state_read() {
   HARNESS_VERSION=1
@@ -48,8 +65,6 @@ state_read() {
   LOOP=0
   MAX_LOOPS=5
   HARNESS_PID=
-  MODEL=
-  VARIANT=
   if [ -f "$STATE_FILE" ]; then
     while IFS='=' read -r key value; do
       case "$key" in
@@ -59,8 +74,6 @@ state_read() {
         LOOP) LOOP="$value" ;;
         MAX_LOOPS) MAX_LOOPS="$value" ;;
         HARNESS_PID) HARNESS_PID="$value" ;;
-        MODEL) MODEL="$value" ;;
-        VARIANT) VARIANT="$value" ;;
       esac
     done < "$STATE_FILE"
   fi
@@ -75,8 +88,6 @@ state_write() {
     echo "LOOP=${LOOP:-0}"
     echo "MAX_LOOPS=${MAX_LOOPS:-5}"
     echo "HARNESS_PID=${HARNESS_PID:-}"
-    echo "MODEL=${MODEL:-}"
-    echo "VARIANT=${VARIANT:-}"
   } > "$tmp"
   mv "$tmp" "$STATE_FILE"
 }
