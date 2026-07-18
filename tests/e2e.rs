@@ -124,13 +124,15 @@ fn test_auto_target_single_session() {
 #[test]
 fn test_multiple_sessions_auto_target_sends_to_active() {
     let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
 
     let sess1 = tala_start(home.path());
     let sess2 = tala_start(home.path());
 
-    // Explicitly set sess2 as active, then send without --session
-    tala_ok(home.path(), &["use", &sess2]);
-    tala_ok(home.path(), &["send", "test"]);
+    // Use a project-specific dir so .tala/active-session is isolated per test
+    // (parallel tests all share the same CWD, which would cause races)
+    tala_in(home.path(), Some(project.path()), &["use", &sess2]);
+    tala_in(home.path(), Some(project.path()), &["send", "test"]);
     let recap = tala_ok(home.path(), &["recap", &sess2]);
     assert!(
         recap.contains("test"),
