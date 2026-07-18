@@ -12,10 +12,10 @@ SCENARIO="${1:-cross-project}"
 MAX_LOOPS="${MAX_LOOPS:-5}"
 AGENT_TIMEOUT="${AGENT_TIMEOUT:-1800}"       # 30 min per agent
 OPENCODE_PORT="${OPENCODE_PORT:-0}"          # 0 = random
-# Priority: env var > state file > empty (opencode default)
+# Priority: env var > .eval.env > empty (opencode default)
 env_model="${MODEL:-}"
 env_variant="${VARIANT:-}"
-state_read 2>/dev/null || true
+config_read
 MODEL="${env_model:-$MODEL}"
 VARIANT="${env_variant:-$VARIANT}"
 SERVER_LOG="$BASE_DIR/tmp/opencode-server.log"
