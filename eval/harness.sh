@@ -532,10 +532,15 @@ cmd_reset() {
   local old_scenario="$SCENARIO"
   state_reset
   say "State reset to initial."
+  STATE=initial
+  LOOP=0
+  HARNESS_PID=""
   if [ -n "$old_scenario" ]; then
     SCENARIO="$old_scenario"
     state_write
     say "Preserved scenario: $old_scenario"
+  else
+    state_write
   fi
   status_line "STATE" "initial"
 }
