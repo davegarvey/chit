@@ -222,14 +222,12 @@ impl Store {
             }
             session.closed = true;
             session.last_activity = Utc::now();
-            drop(sessions);
 
-            if let Some(tx) = self.broadcast.read().await.get(session_id) {
+            let sid = session_id.to_string();
+            if let Some(tx) = self.broadcast.read().await.get(&sid) {
                 let _ = tx.send(DaemonEvent::SessionClosed);
             }
-            let _ = self
-                .global_tx
-                .send((session_id.to_string(), DaemonEvent::SessionClosed));
+            let _ = self.global_tx.send((sid, DaemonEvent::SessionClosed));
             true
         } else {
             false
@@ -244,13 +242,15 @@ impl Store {
             }
             session.closed = false;
             session.last_activity = Utc::now();
-            drop(sessions);
 
-            let event = DaemonEvent::SessionReopened(session_id.to_string());
-            if let Some(tx) = self.broadcast.read().await.get(session_id) {
-                let _ = tx.send(event.clone());
+            let sid = session_id.to_string();
+            let event = DaemonEvent::SessionReopened(sid.clone());
+            if let Some(tx) = self.broadcast.read().await.get(&sid) {
+                let _ = tx.send(event);
             }
-            let _ = self.global_tx.send((session_id.to_string(), event));
+            let _ = self
+                .global_tx
+                .send((sid, DaemonEvent::SessionReopened(session_id.to_string())));
             true
         } else {
             false

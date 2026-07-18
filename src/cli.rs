@@ -821,9 +821,17 @@ async fn cmd_start(
     store::write_active_session(&session.id).await?;
 
     if json_output {
-        println!("{}", serde_json::json!({"session_id": session.id}));
+        let mut out = serde_json::json!({"session_id": session.id});
+        if message.is_some() {
+            out["message_sent"] = serde_json::json!(true);
+        }
+        println!("{}", out);
     } else {
         println!("{}", session.id);
+        if message.is_some() {
+            let sender = store::get_sender_name(None);
+            println!("→ Message sent as \"{}\"", sender);
+        }
     }
     Ok(())
 }
@@ -839,13 +847,12 @@ async fn auto_create_session(
     let client = reqwest::Client::new();
     let url = daemon_url(host, port, "/api/sessions");
     let sender = store::get_sender_name(sender_override);
-    let project_name = store::read_project_config().await;
     let resp = client
         .post(&url)
         .json(&CreateSessionRequest {
             message: None,
             sender: Some(sender),
-            name: project_name,
+            name: None,
         })
         .send()
         .await?;
@@ -943,17 +950,27 @@ async fn cmd_send(
         let resp = client.get(&url).send().await?;
         let sessions: Vec<SessionSummary> = resp.json().await?;
         let active: Vec<_> = sessions.iter().filter(|s| !s.closed).collect();
-        if active.is_empty() {
-            // Auto-create a new session
-            auto_create_session(&host, port, sender_override, quiet, json_output).await?
-        } else {
-            let mut msg = "No active session set.".to_string();
-            for s in &active {
-                let name = s.name.as_deref().unwrap_or("-");
-                msg.push_str(&format!("\n  {}  {}", s.id, name));
+        match active.len() {
+            0 => {
+                // Auto-create a new session
+                auto_create_session(&host, port, sender_override, quiet, json_output).await?
             }
-            msg.push_str("\nSet one with `tala use <id>`");
-            fail(json_output, &msg, "NO_ACTIVE_SESSION");
+            1 => {
+                // Auto-select the only open session
+                if !quiet && !json_output {
+                    eprintln!("Using session {}", active[0].id);
+                }
+                active[0].id.clone()
+            }
+            _ => {
+                let mut msg = "No active session set.".to_string();
+                for s in &active {
+                    let name = s.name.as_deref().unwrap_or("-");
+                    msg.push_str(&format!("\n  {}  {}", s.id, name));
+                }
+                msg.push_str("\nSet one with `tala use <id>`");
+                fail(json_output, &msg, "NO_ACTIVE_SESSION");
+            }
         }
     };
 
@@ -1256,7 +1273,7 @@ async fn cmd_watch(
     since: Option<u64>,
     limit: Option<usize>,
     json_output: bool,
-    _timeout: Option<u64>,
+    timeout: Option<u64>,
 ) -> anyhow::Result<()> {
     let (host, port) = ensure_daemon_running().await?;
     let session_id = resolve_session_id(&host, port, session_arg.as_deref(), "stream").await?;
@@ -1276,11 +1293,25 @@ async fn cmd_watch(
         fail(json_output, &err.error, "SESSION_NOT_FOUND");
     }
 
+    let timeout_dur = timeout.filter(|&t| t > 0).map(Duration::from_secs);
+
     let mut buffer = String::new();
     let mut stream = resp.bytes_stream();
     let mut message_count: u64 = 0;
 
-    while let Some(chunk) = stream.next().await {
+    loop {
+        let chunk = if let Some(dur) = timeout_dur {
+            match tokio::time::timeout(dur, stream.next()).await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        } else {
+            match stream.next().await {
+                Some(chunk) => chunk,
+                None => break,
+            }
+        };
         let chunk = chunk?;
         buffer.push_str(&String::from_utf8_lossy(&chunk));
 
@@ -1506,7 +1537,11 @@ async fn cmd_list(json_output: bool) -> anyhow::Result<()> {
     if json_output {
         let mut enriched: Vec<serde_json::Value> = Vec::new();
         for s in &sessions {
-            let unread = compute_session_unread(&host, port, s, cursor).await;
+            let unread = if s.closed {
+                0
+            } else {
+                compute_session_unread(&host, port, s, cursor).await
+            };
             let mut entry = serde_json::to_value(s).unwrap_or_default();
             if let Some(obj) = entry.as_object_mut() {
                 obj.insert("unread_count".to_string(), serde_json::json!(unread));
@@ -1530,24 +1565,12 @@ async fn cmd_list(json_output: bool) -> anyhow::Result<()> {
         for s in &sessions {
             let status = if s.closed { "closed" } else { "active" };
             let name = s.name.as_deref().unwrap_or("-");
-            let unread = compute_session_unread(&host, port, s, cursor).await;
             let marker = if active_session.as_deref() == Some(&s.id) {
                 " *"
             } else {
                 "  "
             };
-            if unread > 0 {
-                println!(
-                    "{}  {:width$}  {}  {} msgs ({} new){}",
-                    s.id,
-                    name,
-                    status,
-                    s.message_count,
-                    unread,
-                    marker,
-                    width = name_width
-                );
-            } else {
+            if s.closed {
                 println!(
                     "{}  {:width$}  {}  {} msgs{}",
                     s.id,
@@ -1557,6 +1580,30 @@ async fn cmd_list(json_output: bool) -> anyhow::Result<()> {
                     marker,
                     width = name_width
                 );
+            } else {
+                let unread = compute_session_unread(&host, port, s, cursor).await;
+                if unread > 0 {
+                    println!(
+                        "{}  {:width$}  {}  {} msgs ({} new){}",
+                        s.id,
+                        name,
+                        status,
+                        s.message_count,
+                        unread,
+                        marker,
+                        width = name_width
+                    );
+                } else {
+                    println!(
+                        "{}  {:width$}  {}  {} msgs{}",
+                        s.id,
+                        name,
+                        status,
+                        s.message_count,
+                        marker,
+                        width = name_width
+                    );
+                }
             }
         }
     }

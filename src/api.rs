@@ -351,12 +351,20 @@ async fn wait_new_session(
         loop {
             match rx.recv().await {
                 Ok((_sid, DaemonEvent::SessionCreated(id))) => {
-                    return serde_json::json!({"session_id": id});
+                    let msgs = state.store.get_messages_since(&id, 0).await;
+                    let first = msgs.first().cloned();
+                    let mut resp = serde_json::json!({"session_id": id});
+                    if let Some(msg) = first {
+                        resp["message"] = serde_json::to_value(msg).unwrap_or_default();
+                    }
+                    return resp;
                 }
                 Ok((_sid, DaemonEvent::NewMessage(msg))) => {
                     let sessions = state.store.list_sessions().await;
                     if sessions.len() > existing_count {
-                        return serde_json::json!({"session_id": msg.session_id});
+                        let mut resp = serde_json::json!({"session_id": msg.session_id});
+                        resp["message"] = serde_json::to_value(&msg).unwrap_or_default();
+                        return resp;
                     }
                 }
                 Ok((_sid, DaemonEvent::SessionClosed)) => continue,
