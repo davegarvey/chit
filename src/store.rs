@@ -19,18 +19,18 @@ fn generate_session_id() -> String {
     format!("sess_{}", id)
 }
 
-pub fn chit_home() -> PathBuf {
-    if let Some(ch) = std::env::var_os("CHIT_HOME") {
-        PathBuf::from(ch)
+pub fn tala_home() -> PathBuf {
+    if let Some(th) = std::env::var_os("TALA_HOME") {
+        PathBuf::from(th)
     } else if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home).join(".chit")
+        PathBuf::from(home).join(".tala")
     } else {
-        PathBuf::from("/tmp/.chit")
+        PathBuf::from("/tmp/.tala")
     }
 }
 
 pub fn local_config_path() -> PathBuf {
-    PathBuf::from(".chit").join("config.json")
+    PathBuf::from(".tala").join("config.json")
 }
 
 pub struct Store {
@@ -203,20 +203,10 @@ impl Store {
         &self,
         session_id: &str,
         name: &str,
-        force: bool,
+        _force: bool,
     ) -> Result<bool, String> {
         let mut sessions = self.sessions.write().await;
         if let Some(session) = sessions.get_mut(session_id) {
-            if session.name.as_deref() == Some(name) {
-                return Ok(true);
-            }
-            if session.name.is_some() && !force {
-                return Err(format!(
-                    "Session {} already has name '{}'. Use --force to override",
-                    session_id,
-                    session.name.as_deref().unwrap()
-                ));
-            }
             session.name = Some(name.to_string());
             Ok(true)
         } else {
@@ -290,14 +280,14 @@ impl Store {
 }
 
 pub async fn read_daemon_json() -> anyhow::Result<DaemonInfo> {
-    let path = chit_home().join("daemon.json");
+    let path = tala_home().join("daemon.json");
     let content = tokio::fs::read_to_string(&path).await?;
     let info: DaemonInfo = serde_json::from_str(&content)?;
     Ok(info)
 }
 
 pub async fn write_daemon_json(port: u16) -> anyhow::Result<()> {
-    let home = chit_home();
+    let home = tala_home();
     tokio::fs::create_dir_all(&home).await?;
 
     let info = DaemonInfo {
@@ -317,12 +307,12 @@ pub async fn write_daemon_json(port: u16) -> anyhow::Result<()> {
 }
 
 pub async fn remove_daemon_json() {
-    let path = chit_home().join("daemon.json");
+    let path = tala_home().join("daemon.json");
     let _ = tokio::fs::remove_file(&path).await;
 }
 
 pub fn local_active_session_path() -> PathBuf {
-    PathBuf::from(".chit").join("active-session")
+    PathBuf::from(".tala").join("active-session")
 }
 
 pub async fn read_active_session() -> Option<String> {
@@ -352,6 +342,25 @@ pub async fn clear_active_session() -> anyhow::Result<()> {
     if path.exists() {
         tokio::fs::remove_file(&path).await?;
     }
+    Ok(())
+}
+
+pub fn local_cursor_path() -> PathBuf {
+    PathBuf::from(".tala").join("cursor")
+}
+
+pub async fn read_cursor() -> u64 {
+    let path = local_cursor_path();
+    match tokio::fs::read_to_string(&path).await {
+        Ok(content) => content.trim().parse().unwrap_or(0),
+        Err(_) => 0,
+    }
+}
+
+pub async fn write_cursor(cursor: u64) -> anyhow::Result<()> {
+    let path = local_cursor_path();
+    tokio::fs::create_dir_all(path.parent().unwrap()).await?;
+    tokio::fs::write(&path, cursor.to_string()).await?;
     Ok(())
 }
 
@@ -387,7 +396,7 @@ pub fn get_sender_name(override_name: Option<&str>) -> String {
 }
 
 pub async fn read_user_config() -> serde_json::Value {
-    let path = chit_home().join("config.json");
+    let path = tala_home().join("config.json");
     tokio::fs::read_to_string(&path)
         .await
         .ok()
@@ -505,9 +514,9 @@ mod tests {
     }
 
     #[test]
-    fn test_chit_home() {
-        let home = chit_home();
-        assert!(home.ends_with(".chit"), "chit home should end with .chit");
+    fn test_tala_home() {
+        let home = tala_home();
+        assert!(home.ends_with(".tala"), "tala home should end with .tala");
     }
 
     #[tokio::test]
