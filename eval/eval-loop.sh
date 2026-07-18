@@ -100,8 +100,11 @@ run_agent() {
   _timeout "$AGENT_TIMEOUT" "${cmd[@]}" "$prompt" > "$out_file" 2> "$err_file" &
   local agent_pid=$!
 
-  # Register for external progress monitoring
-  echo "$err_file" > "$BASE_DIR/tmp/.agent-${agent_pid}.err"
+  # Register err_file path for external progress monitoring
+  local agent_tag
+  agent_tag=$(echo "$desc" | tr ' /' '_-')
+  echo "$err_file" > "$BASE_DIR/tmp/.agent-watch-${agent_tag}"
+
 
   local start_time
   start_time=$(date +%s)
@@ -148,7 +151,9 @@ run_agent() {
   printf "\r%80s\r" "" >&2
 
   wait "$agent_pid" || true
-  rm -f "$BASE_DIR/tmp/.agent-${agent_pid}.err"
+  local agent_tag
+  agent_tag=$(echo "$desc" | tr ' /' '_-')
+  rm -f "$BASE_DIR/tmp/.agent-watch-${agent_tag}"
   local end_time elapsed
   end_time=$(date +%s)
   elapsed=$((end_time - start_time))
@@ -244,26 +249,37 @@ phase_launch() {
   start_time=$(date +%s)
   local spinner='-\|/'
   local sp_i=0
+
+  # Build list of agent tags for watch file lookup
+  local agent_tags=()
+  for prompt_file in "${prompt_files[@]}"; do
+    local aname
+    aname=$(basename "$prompt_file" .md)
+    agent_tags+=("Sub-agent_${aname}")
+  done
+
   local sizes_file
   sizes_file=$(mktemp)
-  for pid in "${pids[@]}"; do echo "$pid:0" >> "$sizes_file"; done
+  for idx in "${!agent_tags[@]}"; do echo "${idx}:0" >> "$sizes_file"; done
 
   while true; do
-    local running=0 activity=0
-    for pid in "${pids[@]}"; do
+    local running=0 growing=0
+    for idx in "${!pids[@]}"; do
+      local pid="${pids[$idx]}"
       if kill -0 "$pid" 2>/dev/null; then
         running=$((running + 1))
-        local watch="$BASE_DIR/tmp/.agent-${pid}.err"
+        local tag="${agent_tags[$idx]}"
+        local watch="$BASE_DIR/tmp/.agent-watch-${tag}"
         if [ -f "$watch" ]; then
           local epath
           epath=$(cat "$watch")
-          local cur_size
-          cur_size=$(stat -f%z "$epath" 2>/dev/null || stat -c%s "$epath" 2>/dev/null || echo "0")
-          local prev_size
-          prev_size=$(grep "^${pid}:" "$sizes_file" 2>/dev/null | cut -d: -f2 || echo "0")
-          if [ "$cur_size" -gt "$prev_size" ]; then
-            sed -i '' "s/^${pid}:.*/${pid}:${cur_size}/" "$sizes_file"
-            activity=$((activity + 1))
+          local prev_sz
+          prev_sz=$(grep "^${idx}:" "$sizes_file" 2>/dev/null | cut -d: -f2 || echo "0")
+          local cur_sz
+          cur_sz=$(stat -f%z "$epath" 2>/dev/null || stat -c%s "$epath" 2>/dev/null || echo "0")
+          if [ "$cur_sz" -gt "$prev_sz" ]; then
+            sed -i '' "s/^${idx}:.*/${idx}:${cur_sz}/" "$sizes_file" 2>/dev/null || true
+            growing=$((growing + 1))
           fi
         fi
       fi
@@ -276,7 +292,7 @@ phase_launch() {
     done_count=$(( ${#pids[@]} - running ))
     local sp="${spinner:$sp_i:1}"
     sp_i=$(( (sp_i + 1) % 4 ))
-    if [ "$activity" -gt 0 ]; then
+    if [ "$growing" -gt 0 ]; then
       printf "\r  [%s] %d sub-agent(s) running (%ds) %d/%d done ▸▸▸" "$sp" "$running" "$elapsed" "$done_count" "${#pids[@]}" >&2
     else
       printf "\r  [%s] %d sub-agent(s) running (%ds) %d/%d done ···" "$sp" "$running" "$elapsed" "$done_count" "${#pids[@]}" >&2
@@ -284,8 +300,9 @@ phase_launch() {
     sleep 3
   done
 
-  printf "\r%80s\r" "" >&2
   rm -f "$sizes_file"
+
+  printf "\r%80s\r" "" >&2
 
   for pid in "${pids[@]}"; do
     if ! wait "$pid" 2>/dev/null; then
