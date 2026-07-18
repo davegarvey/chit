@@ -611,8 +611,8 @@ main() {
   echo "│  scenario: $SCENARIO"
   echo "│  max loops: $MAX_LOOPS"
   echo "│  agent timeout: ${AGENT_TIMEOUT}s"
-  [ -n "$MODEL" ] && echo "│  model: $MODEL"
-  [ -n "$VARIANT" ] && echo "│  variant: $VARIANT"
+  echo "│  model: ${MODEL:-<default>}"
+  echo "│  variant: ${VARIANT:-<default>}"
   echo "└─────────────────────────────────────────────┘"
 
   start_server
