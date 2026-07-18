@@ -95,7 +95,32 @@ run_agent() {
   local out_file err_file
   out_file=$(mktemp)
   err_file=$(mktemp)
-  _timeout "$AGENT_TIMEOUT" "${cmd[@]}" "$prompt" > "$out_file" 2> "$err_file" || true
+
+  _timeout "$AGENT_TIMEOUT" "${cmd[@]}" "$prompt" > "$out_file" 2> "$err_file" &
+  local agent_pid=$!
+
+  local start_time
+  start_time=$(date +%s)
+  local heartbeat_mark=0
+
+  while kill -0 "$agent_pid" 2>/dev/null; do
+    local now elapsed
+    now=$(date +%s)
+    elapsed=$((now - start_time))
+    local minutes=$((elapsed / 60))
+    if [ "$minutes" -gt "$heartbeat_mark" ]; then
+      heartbeat_mark=$minutes
+      say "$desc still running (${elapsed}s)..."
+    fi
+    sleep 10
+  done
+
+  wait "$agent_pid" || true
+  local end_time elapsed
+  end_time=$(date +%s)
+  elapsed=$((end_time - start_time))
+  say "$desc completed (${elapsed}s)"
+
   if [ -s "$err_file" ]; then
     local filtered
     filtered=$(grep -v -E '(MaxListenersExceededWarning|overflowWarning|node:events|ExperimentalWarning|\(node:\d+|\(Bun:|Bun v)' "$err_file" || true)
