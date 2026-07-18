@@ -93,11 +93,15 @@ run_agent() {
   err_file=$(mktemp)
   _timeout "$AGENT_TIMEOUT" "${cmd[@]}" "$prompt" > "$out_file" 2> "$err_file" || true
   if [ -s "$err_file" ]; then
-    say "WARNING: $desc logged errors"
-    sed 's/^/  [stderr] /' "$err_file" >&2
-    if [ -f "$SERVER_LOG" ]; then
-      say "Server log (last 10 lines):"
-      tail -10 "$SERVER_LOG" | sed 's/^/  /' >&2
+    local filtered
+    filtered=$(grep -v -E '(MaxListenersExceededWarning|overflowWarning|node:events|ExperimentalWarning|\(node:\d+|\(Bun:|Bun v)' "$err_file" || true)
+    if [ -n "$filtered" ]; then
+      say "WARNING: $desc logged errors"
+      echo "$filtered" | sed 's/^/  [stderr] /' >&2
+      if [ -f "$SERVER_LOG" ]; then
+        say "Server log (last 10 lines):"
+        tail -10 "$SERVER_LOG" | sed 's/^/  /' >&2
+      fi
     fi
   fi
   rm -f "$err_file"
@@ -346,7 +350,7 @@ phase_implement() {
   local loop_num="${LOOP:-0}"
 
   local total
-  total=$(jq '.p0 | length + .p1 | length' "$AGENT_TASKS_DIR/$SCENARIO/critic-output-loop-${loop_num}.json" 2>/dev/null || echo "?")
+  total=$(jq '(.p0 | length) + (.p1 | length)' "$AGENT_TASKS_DIR/$SCENARIO/critic-output-loop-${loop_num}.json" 2>/dev/null || echo "?")
 
   local summary_file="$BASE_DIR/tmp/implement-summary-${loop_num}.json"
   local implement_prompt="$BASE_DIR/tmp/implement-prompt-${loop_num}.md"
@@ -418,6 +422,54 @@ PROMPT
   echo "$change_name" > "$BASE_DIR/tmp/change-name-${loop_num}.txt"
 }
 
+wait_for_pr_merge() {
+  local pr_url="$1" branch_name="$2" max_wait="${3:-900}"
+  say "Waiting for CI checks on $branch_name (timeout: ${max_wait}s)..."
+  if ! gh pr checks "$pr_url" --watch --interval 30 -t "$max_wait" 2>/dev/null; then
+    say "ERROR: CI checks failed for $branch_name"
+    gh pr checks "$pr_url" --fail-fast 2>/dev/null || true
+    return 1
+  fi
+  say "CI checks passed for $branch_name"
+  local merge_state
+  merge_state=$(gh pr view "$pr_url" --json mergeStateStatus --jq '.mergeStateStatus' 2>/dev/null || echo "unknown")
+  if [ "$merge_state" = "MERGEABLE" ] || [ "$merge_state" = "CLEAN" ]; then
+    say "PR is mergeable — merging now..."
+    gh pr merge --squash "$pr_url" 2>/dev/null || true
+    local i
+    for i in $(seq 1 30); do
+      local pr_state
+      pr_state=$(gh pr view "$pr_url" --json state --jq '.state' 2>/dev/null || echo "")
+      if [ "$pr_state" = "MERGED" ]; then
+        say "PR merged successfully"
+        return 0
+      fi
+      sleep 5
+    done
+    say "WARNING: Timed out waiting for merge to complete"
+    return 1
+  elif [ "$merge_state" = "DIRTY" ] || [ "$merge_state" = "BLOCKED" ] || [ "$merge_state" = "GATING" ]; then
+    say "WARNING: PR is not mergeable (state=$merge_state). Attempting auto-merge..."
+    gh pr merge --auto --squash "$pr_url" 2>/dev/null || true
+    local i
+    for i in $(seq 1 60); do
+      local pr_state
+      pr_state=$(gh pr view "$pr_url" --json state --jq '.state' 2>/dev/null || echo "")
+      if [ "$pr_state" = "MERGED" ]; then
+        say "PR merged successfully"
+        return 0
+      fi
+      sleep 10
+    done
+    say "WARNING: Timed out waiting for PR merge"
+    return 1
+  else
+    say "WARNING: Unknown merge state '$merge_state'"
+    gh pr merge --auto --squash "$pr_url" 2>/dev/null || true
+    return 1
+  fi
+}
+
 phase_finalize() {
   state_read
   local loop_num="${LOOP:-0}"
@@ -433,6 +485,9 @@ phase_finalize() {
   local branch_name="${change_name}-${loop_num}"
 
   cd "$SCRIPT_DIR/.."
+
+  local tmp
+  tmp=$(mktemp)
 
   local current_branch
   current_branch=$(git rev-parse --abbrev-ref HEAD)
@@ -456,17 +511,23 @@ phase_finalize() {
     pr_url=$(gh pr list --head "$branch_name" --json url --jq '.[0].url' 2>/dev/null || true)
   fi
 
+  local merge_ok=false
   if [ -n "$pr_url" ]; then
-    gh pr merge --auto --squash 2>/dev/null || true
+    if wait_for_pr_merge "$pr_url" "$branch_name"; then
+      merge_ok=true
+    fi
   fi
 
-  local tmp
-  tmp=$(mktemp)
   echo "branch: $branch_name" > "$tmp"
   [ -n "$pr_url" ] && echo "pr: $pr_url" >> "$tmp"
-  echo "auto-merge: squash" >> "$tmp"
+  echo "merged: $merge_ok" >> "$tmp"
   report "finalize" "$tmp"
   rm -f "$tmp"
+
+  if [ "$merge_ok" != "true" ]; then
+    say "ERROR: PR was not merged successfully for $branch_name. Stopping loop."
+    exit 1
+  fi
 }
 
 phase_exit() {

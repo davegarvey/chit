@@ -149,8 +149,13 @@ print(len(d.get('p0',[])) + len(d.get('p1',[])))
 
 advance_setup() {
   local scenario="${SCENARIO}"
+  cd "$SCRIPT_DIR/.."
+  git checkout main 2>/dev/null || true
+  git pull origin main 2>/dev/null || true
+  # Prune merged branches
+  git branch --merged main | grep -v '^\*\|main$' | xargs -r git branch -d 2>/dev/null || true
+  cd "$SCRIPT_DIR"
   mkdir -p "$BASE_DIR/tmp"
-  clean_scenario "$scenario"
   local setup_func="setup_${scenario//-/_}"
   if declare -f "$setup_func" > /dev/null 2>&1; then
     if [ "$AUTO_MODE" = true ]; then

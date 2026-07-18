@@ -208,7 +208,7 @@ cleanup() {
 clean_scenario() {
   local scenario="$1"
   msg "Cleaning previous $scenario run..."
-  rm -rf "$BASE_DIR/tmp/$scenario" "$AGENT_TASKS_DIR/$scenario"
+  rm -rf "$BASE_DIR/tmp/$scenario"
   if [ -f "$BASE_DIR/tmp/daemon.pid" ]; then
     local pid
     pid=$(cat "$BASE_DIR/tmp/daemon.pid")
