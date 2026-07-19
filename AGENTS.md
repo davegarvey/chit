@@ -31,3 +31,10 @@ For step-by-step control, use the harness commands directly:
 ```
 
 See `.opencode/skills/tala-eval/SKILL.md` for full documentation.
+
+## CLI design
+
+When creating or modifying CLI tools, follow the [Command Line Interface Guidelines](https://clig.dev/):
+`verb-noun` subcommands, consistent flags (`--help`, `--version`), `=` for flag values,
+meaningful exit codes, stderr for logs/stdout for data, and `--` to separate options
+from positional arguments.

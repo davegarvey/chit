@@ -1,4 +1,4 @@
-use std::io::{IsTerminal, Read};
+use std::io::Read;
 use std::process;
 use std::time::Duration;
 
@@ -9,13 +9,6 @@ use serde_json::json;
 
 use crate::models::*;
 use crate::store;
-
-fn deprecation_warning(old: &str, new: &str) {
-    eprintln!(
-        "error: '{}' is deprecated and will be removed in a future release. Use 'tala {}' instead.",
-        old, new
-    );
-}
 
 fn fail(json: bool, msg: impl std::fmt::Display, code: &str) -> ! {
     if json {
@@ -33,7 +26,7 @@ fn fail(json: bool, msg: impl std::fmt::Display, code: &str) -> ! {
 #[command(
     name = "tala",
     about = "Agent-to-agent messaging for AI coding tools",
-    long_about = "tala is a lightweight messaging tool for AI agents working across projects.\n\nStart a session with `tala start`, send messages with `tala send`,\nwait for replies with `tala wait`, stream a session with `tala stream`,\nor observe all sessions with `tala listen`.\n\nUse `tala wait --new-session` to wait for another agent to create a session.\n\nEvery command supports --json for structured output.",
+    long_about = "tala is a lightweight messaging tool for AI agents working across projects.\n\nSend messages with `tala send`, wait for replies with `tala wait`, stream a session with `tala stream`,\nor listen to all sessions with `tala listen`.\n\nUse `tala wait --new-session` to wait for another agent to create a session.\n\nEvery command supports --json for structured output.",
     version
 )]
 pub struct Cli {
@@ -45,41 +38,10 @@ pub struct Cli {
 pub enum Commands {
     /// Initialize tala config for this project directory (sets agent name used when sending messages)
     Init {
-        #[arg(
-            help = "Agent name for this project (defaults to directory name)",
-            conflicts_with = "name"
-        )]
-        name_positional: Option<String>,
-        #[arg(
-            long,
-            help = "Agent name for this project (defaults to directory name)"
-        )]
+        #[arg(help = "Agent name for this project (defaults to directory name)")]
         name: Option<String>,
     },
-    /// Start a new messaging session
-    #[command(
-        after_help = "Use --wait / -w to block until the first reply arrives.\nAlias: tala send --wait (send to existing session)"
-    )]
-    Start {
-        #[arg(help = "Optional initial message to send")]
-        message: Option<String>,
-        #[arg(
-            long,
-            short = 'n',
-            help = "Session name (shown in list and observe output)"
-        )]
-        name: Option<String>,
-        #[arg(long, short = 'j', help = "Output in JSON format")]
-        json: bool,
-        #[arg(
-            long,
-            short = 'w',
-            help = "Wait for a reply after creating the session"
-        )]
-        wait: bool,
-        #[arg(long, short = 't', help = "Seconds to wait for a reply (default: 60)")]
-        timeout: Option<u64>,
-    },
+
     /// Set or show the active session for this project directory
     #[command(
         after_help = "See also: tala session (show, rename, reopen) for advanced session management"
@@ -92,9 +54,11 @@ pub enum Commands {
         #[arg(long, short = 'j', help = "Output in JSON format")]
         json: bool,
     },
-    /// Send a message to a session (alias: tala send)
-    #[command(alias = "send")]
-    Chat {
+    /// Send a message to a session. Use `tala session create` to create a session without a message.
+    #[command(
+        after_help = "Use --wait / -w to block until a reply arrives.\nUse `tala session create --name` to create a named session."
+    )]
+    Send {
         #[arg(help = "Session ID (positional, or use --session/-s)")]
         session: Option<String>,
         #[arg(long = "session", short, alias = "session-id", help = "Session ID")]
@@ -107,12 +71,6 @@ pub enum Commands {
         )]
         message_file: Option<String>,
         #[arg(
-            long = "file",
-            hide = true,
-            help = "Read message content from a file (deprecated: use --message-file)"
-        )]
-        file: Option<String>,
-        #[arg(
             long,
             help = "Read message content from stdin (bypasses shell interpretation)"
         )]
@@ -123,7 +81,7 @@ pub enum Commands {
             help = "Wait for a reply after sending (default: return immediately)"
         )]
         wait: bool,
-        #[arg(long = "as", name = "sender_name", help = "Override the sender name")]
+        #[arg(long = "sender", help = "Override the sender name")]
         sender_name: Option<String>,
         #[arg(long, short = 'j', help = "Output in JSON format")]
         json: bool,
@@ -136,7 +94,7 @@ pub enum Commands {
     /// Use `tala stream` for real-time SSE on a single session, or `tala listen` to observe all sessions.
     /// Use `tala wait --new-session` to wait for another agent to create a session.
     #[command(
-        after_help = "USAGE:\n  tala wait <session>          Blocking poll — sends periodic HTTP requests\n  tala wait --new-session     Wait for another agent to create a session\n\nCOMPARISON:\n  tala stream   Real-time SSE — stays connected, pushes messages immediately (single session)\n  tala listen   Real-time SSE — observe all sessions at once\n  tala whatsup  Non-blocking — show new messages and return immediately\n\nSee also: tala recap (transcript), tala session (manage sessions)"
+        after_help = "USAGE:\n  tala wait <session>          Blocking poll — sends periodic HTTP requests\n  tala wait --new-session     Wait for another agent to create a session\n\nCOMPARISON:\n  tala stream   Real-time SSE — stays connected, pushes messages immediately (single session)\n  tala listen   Real-time SSE — observe all sessions at once\n  tala check    Non-blocking — show new messages and return immediately\n\nSee also: tala history (transcript), tala session (manage sessions)"
     )]
     Wait {
         #[arg(help = "Session ID (uses active session if set)")]
@@ -153,8 +111,6 @@ pub enum Commands {
         timeout: Option<u64>,
         #[arg(long, help = "Only return messages with ID greater than this")]
         since: Option<u64>,
-        #[arg(long, help = "Alias for --since (last seen cursor)")]
-        cursor: Option<u64>,
         #[arg(long, help = "Maximum number of messages to return (0 = unlimited)")]
         limit: Option<usize>,
         #[arg(long, help = "Only return messages from this sender")]
@@ -163,7 +119,6 @@ pub enum Commands {
         json: bool,
         #[arg(
             long = "new-session",
-            alias = "new",
             help = "Wait for a new session to be created (ignores other args)"
         )]
         r#new: bool,
@@ -172,7 +127,7 @@ pub enum Commands {
     /// Use `tala wait` for a blocking poll (request/response), or `tala listen` to observe all sessions.
     #[command(
         name = "stream",
-        after_help = "USAGE:\n  tala stream <session>   Real-time SSE — stays connected, pushes messages immediately (single session)\n\nCOMPARISON:\n  tala wait     Blocking poll — sends periodic HTTP requests, good for scripts and CI\n  tala listen   Real-time SSE — observe all sessions at once\n  tala whatsup  Non-blocking — show new messages and return immediately\n\nSee also: tala recap (transcript)"
+        after_help = "USAGE:\n  tala stream <session>   Real-time SSE — stays connected, pushes messages immediately (single session)\n\nCOMPARISON:\n  tala wait     Blocking poll — sends periodic HTTP requests, good for scripts and CI\n  tala listen   Real-time SSE — observe all sessions at once\n  tala check    Non-blocking — show new messages and return immediately\n\nSee also: tala history (transcript)"
     )]
     Stream {
         #[arg(help = "Session ID (uses active session if set)")]
@@ -194,55 +149,12 @@ pub enum Commands {
         #[arg(long, help = "Seconds to stay connected before disconnecting")]
         timeout: Option<u64>,
     },
-    /// Stream new messages as they arrive (SSE) [deprecated: use stream]
-    #[command(hide = true)]
-    Follow {
-        #[arg(help = "Session ID (uses active session if set)")]
-        session: Option<String>,
-        #[arg(
-            long = "session",
-            short,
-            alias = "session-id",
-            conflicts_with = "session",
-            help = "Session ID"
-        )]
-        session_arg: Option<String>,
-        #[arg(long, help = "Only stream messages with ID greater than this")]
-        since: Option<u64>,
-        #[arg(long, help = "Maximum number of messages to stream (0 = unlimited)")]
-        limit: Option<usize>,
-        #[arg(long, short = 'j', help = "Output in JSON format")]
-        json: bool,
-        #[arg(long, help = "Seconds to stay connected before disconnecting")]
-        timeout: Option<u64>,
-    },
-    /// Stream new messages as they arrive (SSE) [deprecated: use stream]
-    #[command(hide = true)]
-    Watch {
-        #[arg(help = "Session ID (uses active session if set)")]
-        session: Option<String>,
-        #[arg(
-            long = "session",
-            short,
-            alias = "session-id",
-            conflicts_with = "session",
-            help = "Session ID"
-        )]
-        session_arg: Option<String>,
-        #[arg(long, help = "Only stream messages with ID greater than this")]
-        since: Option<u64>,
-        #[arg(long, help = "Maximum number of messages to stream (0 = unlimited)")]
-        limit: Option<usize>,
-        #[arg(long, short = 'j', help = "Output in JSON format")]
-        json: bool,
-        #[arg(long, help = "Seconds to stay connected before disconnecting")]
-        timeout: Option<u64>,
-    },
+
     /// View conversation transcript
     #[command(
         after_help = "See also: tala wait (blocking poll), tala listen (all sessions), tala stream (real-time SSE)"
     )]
-    Recap {
+    History {
         #[arg(help = "Session ID (uses active session if set)")]
         session: Option<String>,
         #[arg(
@@ -255,8 +167,6 @@ pub enum Commands {
         session_arg: Option<String>,
         #[arg(long, help = "Only show messages with ID greater than this")]
         since: Option<u64>,
-        #[arg(long, help = "Alias for --since (last seen cursor)")]
-        cursor: Option<u64>,
         #[arg(long, help = "Only show messages from this sender")]
         from: Option<String>,
         #[arg(long, help = "Maximum number of messages to show (0 = unlimited)")]
@@ -267,7 +177,7 @@ pub enum Commands {
     /// Observe all sessions for new messages (real-time SSE across all sessions).
     /// Use `tala stream` for a single session, or `tala wait` for a blocking poll.
     #[command(
-        after_help = "USAGE:\n  tala listen                Real-time SSE — observe all sessions at once\n  tala listen --since <n>   Skip history replay (only messages with ID > n)\n  tala listen --from <name> Filter messages from a specific sender\n  tala listen --match <text> Filter messages containing text\n\nCOMPARISON:\n  tala stream   Real-time SSE — single session\n  tala wait     Blocking poll — sends periodic HTTP requests, good for scripts and CI\n  tala whatsup  Non-blocking — show new messages and return immediately\n\nSee also: tala recap (transcript)"
+        after_help = "USAGE:\n  tala listen                Real-time SSE — observe all sessions at once\n  tala listen --since <n>   Skip history replay (only messages with ID > n)\n  tala listen --from <name> Filter messages from a specific sender\n  tala listen --match <text> Filter messages containing text\n  tala listen --name <name> Filter by session name\n\nCOMPARISON:\n  tala stream   Real-time SSE — single session\n  tala wait     Blocking poll — sends periodic HTTP requests, good for scripts and CI\n  tala check    Non-blocking -- show new messages and return immediately\n\nSee also: tala history (transcript)"
     )]
     Listen {
         #[arg(long, help = "Only show messages with ID greater than this")]
@@ -277,7 +187,7 @@ pub enum Commands {
         #[arg(long, help = "Only show messages from this sender")]
         from: Option<String>,
         #[arg(long, help = "Only show messages in sessions with matching name")]
-        channel: Option<String>,
+        name: Option<String>,
         #[arg(
             long,
             help = "Seconds to stay connected before disconnecting (default: 60, 0 = no timeout)"
@@ -286,27 +196,12 @@ pub enum Commands {
         #[arg(long, short = 'j', help = "Output in JSON format")]
         json: bool,
     },
-    /// Watch all sessions [deprecated: use listen]
-    #[command(hide = true)]
-    Observe {
-        #[arg(long, help = "Only show messages with ID greater than this")]
-        since: Option<u64>,
-        #[arg(long, help = "Only show messages containing this text")]
-        r#match: Option<String>,
-        #[arg(long, help = "Only show messages from this sender")]
-        from: Option<String>,
-        #[arg(long, help = "Only show messages in sessions with matching name")]
-        channel: Option<String>,
-        #[arg(long, help = "Seconds to stay connected before disconnecting")]
-        timeout: Option<u64>,
-        #[arg(long, short = 'j', help = "Output in JSON format")]
-        json: bool,
-    },
+
     /// Show new messages since last check (non-blocking)
     #[command(
-        after_help = "See also: tala wait (blocking poll), tala listen (all sessions), tala stream (real-time SSE), tala recap (transcript)"
+        after_help = "See also: tala wait (blocking poll), tala listen (all sessions), tala stream (real-time SSE), tala history (transcript)"
     )]
-    WhatsUp {
+    Check {
         #[arg(long, short = 'j', help = "Output in JSON format")]
         json: bool,
     },
@@ -403,32 +298,32 @@ pub enum SessionCommands {
         #[arg(long, short = 'j', help = "Output in JSON format")]
         json: bool,
     },
+    /// Create a new empty session
+    Create {
+        #[arg(
+            long,
+            short = 'n',
+            help = "Session name (shown in list and check output)"
+        )]
+        name: Option<String>,
+        #[arg(long, short = 'j', help = "Output in JSON format")]
+        json: bool,
+    },
 }
 
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
-        Commands::Init {
-            name_positional,
-            name,
-        } => cmd_init(name_positional.or(name)).await,
-        Commands::Start {
-            message,
-            name,
-            json,
-            wait,
-            timeout,
-        } => cmd_start(message, name, json, wait, timeout).await,
+        Commands::Init { name } => cmd_init(name).await,
         Commands::Use {
             session_id,
             clear,
             json,
         } => cmd_use(session_id, clear, json).await,
-        Commands::Chat {
+        Commands::Send {
             session,
             session_arg,
             message,
             message_file,
-            file,
             stdin,
             wait,
             sender_name,
@@ -436,9 +331,6 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             quiet,
             timeout,
         } => {
-            // Resolve session: --session/-s flag takes priority
-            // Positional session arg is used if it looks like a sess_ ID
-            // Otherwise the positional arg is treated as the message
             let session_flag = session_arg.is_some();
             let resolved_session = session_arg
                 .or_else(|| session.as_ref().filter(|s| s.starts_with("sess_")).cloned());
@@ -452,20 +344,10 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             if stdin && resolved_message.is_some() {
                 eprintln!("Warning: --stdin is set, ignoring positional message argument");
             }
-            // Resolve message file source with deprecation warning
-            let resolved_file = if file.is_some() && message_file.is_some() {
-                eprintln!("Warning: both --file and --message-file provided, using --message-file");
-                message_file
-            } else if file.is_some() {
-                eprintln!("Warning: --file is deprecated and will be removed in a future release. Use --message-file instead.");
-                file
-            } else {
-                message_file
-            };
             cmd_send(
                 resolved_session,
                 resolved_message,
-                resolved_file,
+                message_file,
                 stdin,
                 wait,
                 sender_name.as_deref(),
@@ -480,7 +362,6 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             session_arg,
             timeout,
             since,
-            cursor,
             limit,
             from,
             json,
@@ -489,15 +370,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             if r#new {
                 cmd_wait_new(timeout, json).await
             } else {
-                cmd_wait(
-                    session.or(session_arg),
-                    timeout,
-                    since.or(cursor),
-                    limit,
-                    from,
-                    json,
-                )
-                .await
+                cmd_wait(session.or(session_arg), timeout, since, limit, from, json).await
             }
         }
         Commands::Stream {
@@ -508,56 +381,22 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             json,
             timeout,
         } => cmd_watch(session.or(session_arg), since, limit, json, timeout).await,
-        Commands::Watch {
+        Commands::History {
             session,
             session_arg,
             since,
-            limit,
-            json,
-            timeout,
-        } => {
-            deprecation_warning("watch", "stream");
-            cmd_watch(session.or(session_arg), since, limit, json, timeout).await
-        }
-        Commands::Follow {
-            session,
-            session_arg,
-            since,
-            limit,
-            json,
-            timeout,
-        } => {
-            deprecation_warning("follow", "stream");
-            cmd_watch(session.or(session_arg), since, limit, json, timeout).await
-        }
-        Commands::Recap {
-            session,
-            session_arg,
-            since,
-            cursor,
             from,
             limit,
             json,
-        } => cmd_recap(session.or(session_arg), since.or(cursor), from, limit, json).await,
+        } => cmd_recap(session.or(session_arg), since, from, limit, json).await,
         Commands::Listen {
             since,
             r#match,
             from,
-            channel,
+            name,
             timeout,
             json,
-        } => cmd_listen(since, r#match, from, channel, timeout, json).await,
-        Commands::Observe {
-            since,
-            r#match,
-            from,
-            channel,
-            timeout,
-            json,
-        } => {
-            deprecation_warning("observe", "listen");
-            cmd_listen(since, r#match, from, channel, timeout, json).await
-        }
+        } => cmd_listen(since, r#match, from, name, timeout, json).await,
         Commands::List { json } => cmd_list(json).await,
         Commands::Discover { json } => cmd_discover(json).await,
         Commands::Agents { json } => cmd_agents(json).await,
@@ -567,7 +406,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             json,
             quiet,
         } => cmd_close(session.or(session_arg), json, quiet).await,
-        Commands::WhatsUp { json } => cmd_whatsup(json).await,
+        Commands::Check { json } => cmd_whatsup(json).await,
         Commands::Status { json } => cmd_status(json).await,
         Commands::Stop => cmd_stop().await,
         Commands::Daemon => crate::daemon::run_daemon().await,
@@ -586,6 +425,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             SessionCommands::Reopen { session_id, json } => {
                 cmd_session_reopen(session_id, json).await
             }
+            SessionCommands::Create { name, json } => cmd_session_create(name, json).await,
         },
     }
 }
@@ -670,7 +510,7 @@ async fn resolve_session_id(
     let active: Vec<_> = sessions.iter().filter(|s| !s.closed).collect();
 
     match active.len() {
-        0 => bail!("No active sessions. Start one with `tala start`"),
+        0 => bail!("No active sessions. Start one with `tala send`"),
         1 => Ok(active[0].id.clone()),
         _ => {
             let ids: Vec<&str> = active.iter().map(|s| s.id.as_str()).collect();
@@ -684,10 +524,10 @@ async fn resolve_session_id(
 }
 
 async fn cmd_init(name: Option<String>) -> anyhow::Result<()> {
-    let chit_dir = std::path::PathBuf::from(".tala");
-    tokio::fs::create_dir_all(&chit_dir).await?;
+    let tala_dir = std::path::PathBuf::from(".tala");
+    tokio::fs::create_dir_all(&tala_dir).await?;
 
-    let config_path = chit_dir.join("config.json");
+    let config_path = tala_dir.join("config.json");
     if config_path.exists() {
         eprintln!("./.tala/config.json already exists");
     } else {
@@ -727,8 +567,8 @@ metadata:
 ---
 # tala — Agent-to-Agent Messaging
 
-Send FYI messages with `tala send "msg"` (uses active session, returns immediately). Requires `tala start` first.
-Request replies with `tala send --wait "question"`. Receive sessions with `tala wait --new-session`.
+Send messages with `tala send "msg"`. Request replies with `tala send --wait "question"`.
+Wait for incoming sessions with `tala wait --new-session`. View history with `tala history`.
 Pipe messages: `echo "msg" | tala send`. All commands support `--json`.
 
 ## Common Patterns
@@ -738,20 +578,24 @@ Pipe messages: `echo "msg" | tala send`. All commands support `--json`.
 | Broadcast FYI | `tala send "status: done"` |
 | Request + wait | `tala send --wait "need help" --timeout 60` |
 | Wait for incoming | `sess=$(tala wait --new-session --timeout 600)` |
-| Read transcript | `tala recap` |
-| Named session | `tala start --name "my-project"` |
+| Read transcript | `tala history` |
+| Named session | `tala session create --name "my-project"` |
 | Watch all | `tala listen` |
 | Filtered watch | `tala listen --from "alpha" --match "urgent"` |
+| Override sender | `tala send --sender "bot" "hello"` |
+| Check messages | `tala check` |
 | Discover agents | `tala agents` |
 | Cross-project discovery | `tala discover` |
 
 ## Key Behaviors (v0.23+)
 - Send returns immediately by default (fire-and-forget). Use `-w`/`--wait` to block.
-- `tala start` is required first — `tala send` needs an active session.
+- If no session exists and you provide a message, auto-creates a session.
+- Use `tala session create` to create a session without a message.
 - Active session is auto-set per project directory (`.tala/active-session`).
 - `tala wait` without `--since` only waits for new messages (no history replay).
 - `tala wait --new-session` blocks until another agent creates a session.
-- `tala listen` watches all sessions (replaces `tala observe`).
+- `tala listen` watches all sessions.
+- `tala check` shows new messages since last check (non-blocking).
 - `tala agents` lists active participants.
 - `tala discover` finds agents in other projects.
 - `TALA_HOME` env var overrides `~/.tala` for isolated daemon instances.
@@ -770,7 +614,7 @@ Pipe messages: `echo "msg" | tala send`. All commands support `--json`.
     let command = r#"---
 description: Use tala for agent-to-agent messaging — cross-project, cross-terminal, cross-agent communication.
 ---
-Run tala for agent-to-agent messaging. Start a session with `tala start "msg"`, then send messages with `tala send "msg"`. Request replies with `tala send --wait "question"`. Receive sessions with `tala wait --new-session`. Watch all activity with `tala listen`. Read transcripts with `tala recap`. Discover cross-project agents with `tala discover`. Pipe messages via stdin. All commands support `--json`. By default, `tala send` returns immediately (use `-w`/`--wait` to block).
+Run tala for agent-to-agent messaging. Send messages with `tala send "msg"`. Request replies with `tala send --wait "question"`. Receive sessions with `tala wait --new-session`. Watch all activity with `tala listen`. Read transcripts with `tala history`. Check for new messages with `tala check`. Discover cross-project agents with `tala discover`. Pipe messages via stdin. All commands support `--json`. By default, `tala send` returns immediately (use `-w`/`--wait` to block).
 "#;
     tokio::fs::write(&command_path, command).await?;
     println!("Created .opencode/commands/tala.md");
@@ -915,7 +759,7 @@ async fn cmd_use(session_id: Option<String>, clear: bool, json_output: bool) -> 
                     if let Ok(sessions) = resp.json::<Vec<SessionSummary>>().await {
                         let active: Vec<_> = sessions.iter().filter(|s| !s.closed).collect();
                         if active.is_empty() {
-                            println!("No active sessions. Start one with `tala start <message>`.");
+                            println!("No active sessions. Start one with `tala send`.");
                         } else {
                             println!("Available sessions:\n");
                             for s in &active {
@@ -935,131 +779,6 @@ async fn cmd_use(session_id: Option<String>, clear: bool, json_output: bool) -> 
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn cmd_start(
-    message: Option<String>,
-    session_name: Option<String>,
-    json_output: bool,
-    should_wait: bool,
-    wait_timeout: Option<u64>,
-) -> anyhow::Result<()> {
-    let (host, port) = ensure_daemon_running().await?;
-    let client = reqwest::Client::new();
-    let url = daemon_url(&host, port, "/api/sessions");
-
-    let name = session_name.or_else(|| {
-        tokio::runtime::Handle::try_current().ok().and_then(|_| {
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(store::read_project_config())
-            })
-        })
-    });
-
-    let req_body = CreateSessionRequest {
-        message: message.clone(),
-        sender: message.as_ref().map(|_| store::get_sender_name(None)),
-        name,
-    };
-
-    let resp = client.post(&url).json(&req_body).send().await?;
-    let session: CreateSessionResponse = resp.json().await?;
-
-    store::write_active_session(&session.id).await?;
-
-    // Check delivery: how many agents are actively listening?
-    let agents_url = daemon_url(&host, port, "/api/agents");
-    let agents_listening = match reqwest::get(&agents_url).await {
-        Ok(r) => match r.json::<Vec<AgentSummary>>().await {
-            Ok(a) => a.len(),
-            Err(_) => 0,
-        },
-        Err(_) => 0,
-    };
-
-    if json_output {
-        let mut out = serde_json::json!({
-            "session_id": session.id,
-            "agents_listening": agents_listening
-        });
-        if message.is_some() {
-            out["message_sent"] = serde_json::json!(true);
-        }
-        println!("{}", out);
-    } else {
-        println!("{}", session.id);
-        if message.is_some() {
-            let sender = store::get_sender_name(None);
-            println!("→ Message sent as \"{}\"", sender);
-        }
-        if agents_listening == 0 {
-            println!("→ No agents currently listening");
-        } else {
-            println!("→ {} agents listening", agents_listening);
-        }
-    }
-
-    if !should_wait {
-        return Ok(());
-    }
-
-    // Wait for the first reply
-    let since = session.first_message_id.unwrap_or(0);
-    let wait_path = if let Some(to) = wait_timeout {
-        format!(
-            "/api/sessions/{}/wait?since={}&timeout_secs={}",
-            session.id, since, to
-        )
-    } else {
-        format!("/api/sessions/{}/wait?since={}", session.id, since)
-    };
-    let wait_url = daemon_url(&host, port, &wait_path);
-
-    let spinner = if !json_output {
-        eprint!("⏎ Waiting for reply");
-        let _ = std::io::Write::flush(&mut std::io::stderr());
-        let spinner = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(5));
-            loop {
-                interval.tick().await;
-                eprint!(".");
-                let _ = std::io::Write::flush(&mut std::io::stderr());
-            }
-        });
-        Some(spinner)
-    } else {
-        None
-    };
-
-    let wait_resp = client.get(&wait_url).send().await?;
-
-    if let Some(s) = spinner {
-        s.abort();
-        let _ = s.await;
-    }
-
-    let result: WaitResponse = wait_resp.json().await?;
-
-    if json_output {
-        println!("{}", serde_json::to_string(&result).unwrap());
-        if result.timeout {
-            process::exit(2);
-        }
-    } else if result.closed {
-        println!("[session closed]");
-    } else if result.timeout {
-        println!(
-            "[timeout after {}s, no reply]",
-            result.timeout_after.unwrap_or(0)
-        );
-        process::exit(2);
-    } else {
-        for m in &result.messages {
-            println!("{}: {}", m.sender, m.content);
-        }
-    }
-
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn auto_create_session(
     host: &str,
@@ -1067,6 +786,7 @@ async fn auto_create_session(
     sender_override: Option<&str>,
     quiet: bool,
     json_output: bool,
+    session_name: Option<String>,
 ) -> anyhow::Result<String> {
     let client = reqwest::Client::new();
     let url = daemon_url(host, port, "/api/sessions");
@@ -1076,23 +796,38 @@ async fn auto_create_session(
         .json(&CreateSessionRequest {
             message: None,
             sender: Some(sender),
-            name: None,
+            name: session_name,
         })
         .send()
         .await?;
     let session: CreateSessionResponse = resp.json().await?;
     store::write_active_session(&session.id).await?;
     if !quiet && !json_output {
-        println!("→ Created session {}", session.id);
+        println!("{}", session.id);
     }
     Ok(session.id)
+}
+
+async fn try_read_piped_stdin() -> Option<String> {
+    tokio::time::timeout(Duration::from_millis(500), async {
+        tokio::task::spawn_blocking(|| {
+            let mut buf = String::new();
+            std::io::stdin().read_to_string(&mut buf).ok()?;
+            let trimmed = buf.trim_end_matches('\n').to_string();
+            if trimmed.is_empty() { None } else { Some(trimmed) }
+        })
+        .await
+        .ok()?
+    })
+    .await
+    .ok()?
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn cmd_send(
     session_arg: Option<String>,
     message: Option<String>,
-    file: Option<String>,
+    message_file: Option<String>,
     stdin_flag: bool,
     should_wait: bool,
     sender_override: Option<&str>,
@@ -1100,25 +835,34 @@ async fn cmd_send(
     quiet: bool,
     chat_timeout: Option<u64>,
 ) -> anyhow::Result<()> {
-    let content = if let Some(f) = file {
-        if f == "-" {
-            if std::io::stdin().is_terminal() {
-                anyhow::bail!("No piped input. Use `--stdin` for explicit stdin, or provide a filename for --file");
-            }
-            let read = tokio::task::spawn_blocking(|| {
-                let mut buf = String::new();
-                std::io::stdin().read_to_string(&mut buf).ok()?;
-                let trimmed = buf.trim_end_matches('\n').to_string();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed)
+    let (host, port) = ensure_daemon_running().await?;
+
+    let has_content = message.is_some() || message_file.is_some() || stdin_flag;
+
+    if !has_content && session_arg.is_none()
+        && store::read_active_session().await.is_none()
+    {
+        let mut hint = String::new();
+        if let Ok(req) = reqwest::get(&daemon_url(&host, port, "/api/sessions")).await {
+            if let Ok(sessions) = req.json::<Vec<SessionSummary>>().await {
+                let active: Vec<_> = sessions.iter().filter(|s| !s.closed).collect();
+                if active.len() >= 1 {
+                    hint = format!("\nActive session: {} {}. Set it with `tala use` or target it with `tala send --session <id>`.",
+                        active[0].id,
+                        active[0].name.as_deref().unwrap_or(""),
+                    );
                 }
-            });
-            match tokio::time::timeout(Duration::from_secs(3600), read).await {
-                Ok(Ok(Some(content))) => content,
-                _ => anyhow::bail!("No piped input. Use `--stdin` for explicit stdin, or provide a filename for --file")
             }
+        }
+        anyhow::bail!("Nothing to send. Use `tala session create` to create a session without a message.{}", hint);
+    }
+
+    // Resolve content
+    let content = if let Some(f) = message_file {
+        if f == "-" {
+            let piped = try_read_piped_stdin().await
+                .ok_or_else(|| anyhow::anyhow!("No piped input. Use `--stdin` for explicit stdin, or provide a filename for --message-file"))?;
+            piped
         } else {
             tokio::fs::read_to_string(&f)
                 .await?
@@ -1126,51 +870,17 @@ async fn cmd_send(
                 .to_string()
         }
     } else if stdin_flag {
-        if std::io::stdin().is_terminal() {
-            anyhow::bail!("No message provided via stdin (use `--stdin` flag with piped input)");
-        }
-        let read = tokio::task::spawn_blocking(|| {
-            let mut buf = String::new();
-            std::io::stdin().read_to_string(&mut buf).ok()?;
-            let trimmed = buf.trim_end_matches('\n').to_string();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        });
-        match tokio::time::timeout(Duration::from_secs(3600), read).await {
-            Ok(Ok(Some(content))) => content,
-            _ => {
-                anyhow::bail!("No message provided via stdin (use `--stdin` flag with piped input)")
-            }
-        }
+        try_read_piped_stdin().await
+            .ok_or_else(|| anyhow::anyhow!("No message provided via stdin (use `--stdin` flag with piped input)"))?
     } else if let Some(msg) = &message {
-        msg.clone()
-    } else if !std::io::stdin().is_terminal() {
-        let read = tokio::task::spawn_blocking(|| {
-            let mut buf = String::new();
-            std::io::stdin().read_to_string(&mut buf).ok()?;
-            let trimmed = buf.trim_end_matches('\n').to_string();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        });
-        match tokio::time::timeout(Duration::from_millis(500), read).await {
-            Ok(Ok(Some(content))) => content,
-            _ => anyhow::bail!(
-                "No message provided. Use a positional argument, --file <path>, --stdin, or pipe to stdin"
-            ),
+        if msg.is_empty() {
+            anyhow::bail!("Message cannot be empty.");
         }
+        msg.clone()
     } else {
-        anyhow::bail!(
-            "No message provided. Use a positional argument, --file <path>, --stdin, or pipe to stdin"
-        );
+        try_read_piped_stdin().await
+            .ok_or_else(|| anyhow::anyhow!("No message provided. Use a positional argument, --message-file <path>, --stdin, or pipe to stdin"))?
     };
-
-    let (host, port) = ensure_daemon_running().await?;
 
     // Resolve session: explicit, active, stale-replace, or auto-create
     let session_id = if let Some(id) = session_arg.clone() {
@@ -1185,7 +895,7 @@ async fn cmd_send(
                 if session.closed {
                     store::clear_active_session().await?;
                     let msg = format!(
-                        "Session {} is closed. Use `tala session reopen {}` to reopen it, or `tala start` to create a new one.",
+                        "Session {} is closed. Use `tala session reopen {}` to reopen it.",
                         id, id
                     );
                     fail(json_output, &msg, "SESSION_CLOSED");
@@ -1195,7 +905,7 @@ async fn cmd_send(
             _ => {
                 // Stale active session — replace with a new one
                 store::clear_active_session().await?;
-                auto_create_session(&host, port, sender_override, quiet, json_output).await?
+                auto_create_session(&host, port, sender_override, quiet, json_output, None).await?
             }
         }
     } else {
@@ -1207,11 +917,9 @@ async fn cmd_send(
         let active: Vec<_> = sessions.iter().filter(|s| !s.closed).collect();
         match active.len() {
             0 => {
-                // Auto-create a new session
-                auto_create_session(&host, port, sender_override, quiet, json_output).await?
+                auto_create_session(&host, port, sender_override, quiet, json_output, None).await?
             }
             1 => {
-                // Auto-select the only open session
                 if !quiet && !json_output {
                     eprintln!("Using session {}", active[0].id);
                 }
@@ -1229,13 +937,23 @@ async fn cmd_send(
         }
     };
 
+    send_content(session_id, &content, sender_override, should_wait, chat_timeout, json_output, quiet, &host, port).await
+}
+
+async fn send_content(
+    session_id: String,
+    content: &str,
+    sender_override: Option<&str>,
+    should_wait: bool,
+    chat_timeout: Option<u64>,
+    json_output: bool,
+    quiet: bool,
+    host: &str,
+    port: u16,
+) -> anyhow::Result<()> {
     let sender = store::get_sender_name(sender_override);
     let client = reqwest::Client::new();
-    let url = daemon_url(
-        &host,
-        port,
-        &format!("/api/sessions/{}/messages", session_id),
-    );
+    let url = daemon_url(host, port, &format!("/api/sessions/{}/messages", session_id));
 
     let req = SendMessageRequest {
         sender,
@@ -1248,7 +966,7 @@ async fn cmd_send(
         let (msg, code) = if err.error.contains("closed") {
             (
                 format!(
-                    "Session {} is closed. Use `tala session reopen {}` to reopen it, or `tala start` to create a new one.",
+                    "Session {} is closed. Use `tala session reopen {}` to reopen it.",
                     session_id, session_id
                 ),
                 "SESSION_CLOSED",
@@ -1294,7 +1012,7 @@ async fn cmd_send(
     if let Some(to) = chat_timeout {
         wait_url = format!("{}&timeout_secs={}", wait_url, to);
     }
-    let wait_url = daemon_url(&host, port, &wait_url);
+    let wait_url = daemon_url(host, port, &wait_url);
     let wait_resp = client.get(&wait_url).send().await?;
     if let Some(s) = spinner {
         s.abort();
@@ -1303,7 +1021,7 @@ async fn cmd_send(
     let result: WaitResponse = wait_resp.json().await?;
 
     if !json_output && !quiet {
-        eprintln!(); // clear the "Waiting for reply..." line
+        eprintln!();
     }
     if json_output {
         println!("{}", serde_json::to_string(&result).unwrap());
@@ -1655,7 +1373,7 @@ async fn cmd_listen(
     since: Option<u64>,
     match_str: Option<String>,
     from: Option<String>,
-    channel: Option<String>,
+    name: Option<String>,
     timeout: Option<u64>,
     json_output: bool,
 ) -> anyhow::Result<()> {
@@ -1673,8 +1391,8 @@ async fn cmd_listen(
     if let Some(ref f) = from {
         path = format!("{}&from={}", path, f);
     }
-    if let Some(ref ch) = channel {
-        path = format!("{}&channel={}", path, ch);
+    if let Some(ref n) = name {
+        path = format!("{}&channel={}", path, n);
     }
     // Default timeout to 60s if not specified, unless explicitly set to 0
     let timeout_secs = timeout.filter(|&t| t != 0).or(Some(60u64));
@@ -2079,7 +1797,7 @@ async fn cmd_agents(json_output: bool) -> anyhow::Result<()> {
     if json_output {
         println!("{}", serde_json::to_string(&agents).unwrap());
     } else if agents.is_empty() {
-        println!("No active agents found. Start a session with `tala start <message>`, or try `tala discover` to find agents in other projects.");
+        println!("No active agents found. Start a session with `tala send`, or try `tala discover` to find agents in other projects.");
     } else {
         for a in &agents {
             println!(
@@ -2233,6 +1951,15 @@ async fn cmd_session_reopen(session_id: String, json_output: bool) -> anyhow::Re
     } else {
         println!("Session {} reopened (now active)", session_id);
     }
+    Ok(())
+}
+
+async fn cmd_session_create(
+    session_name: Option<String>,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    let (host, port) = ensure_daemon_running().await?;
+    auto_create_session(&host, port, None, false, json_output, session_name).await?;
     Ok(())
 }
 

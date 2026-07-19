@@ -41,7 +41,13 @@ fn tala_ok(home: &std::path::Path, args: &[&str]) -> String {
 }
 
 fn tala_start(home: &std::path::Path) -> String {
-    let stdout = tala_ok(home, &["start"]);
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let project = home.join(format!("p-{}", n));
+    std::fs::create_dir_all(&project).unwrap();
+    let (stdout, _stderr, ok) = tala_in(home, Some(&project), &["session", "create"]);
+    assert!(ok, "tala session create failed\nstdout: {}\nstderr: {}", stdout, _stderr);
     stdout.lines().next().unwrap_or("").trim().to_string()
 }
 
@@ -90,7 +96,7 @@ fn test_send_and_recap() {
         &["send", "--session", &session, "Hello from **test**"],
     );
 
-    let recap = tala_ok(home.path(), &["recap", &session]);
+    let recap = tala_ok(home.path(), &["history", &session]);
     assert!(
         recap.contains("Hello from **test**"),
         "recap should contain message"
@@ -111,7 +117,7 @@ fn test_auto_target_single_session() {
         &["send", "--session", &sess, "auto-target test"],
     );
 
-    let recap = tala_ok(home.path(), &["recap", &sess]);
+    let recap = tala_ok(home.path(), &["history", &sess]);
     assert!(
         recap.contains("auto-target test"),
         "recap should contain message via auto-target: {}",
@@ -133,7 +139,7 @@ fn test_multiple_sessions_auto_target_sends_to_active() {
     // (parallel tests all share the same CWD, which would cause races)
     tala_in(home.path(), Some(project.path()), &["use", &sess2]);
     tala_in(home.path(), Some(project.path()), &["send", "test"]);
-    let recap = tala_ok(home.path(), &["recap", &sess2]);
+    let recap = tala_ok(home.path(), &["history", &sess2]);
     assert!(
         recap.contains("test"),
         "message should go to active session (sess2)"
@@ -141,7 +147,7 @@ fn test_multiple_sessions_auto_target_sends_to_active() {
 
     // Explicit --session still works for other sessions
     tala_ok(home.path(), &["send", "--session", &sess1, "explicit send"]);
-    let recap2 = tala_ok(home.path(), &["recap", &sess1]);
+    let recap2 = tala_ok(home.path(), &["history", &sess1]);
     assert!(
         recap2.contains("explicit send"),
         "explicit send to sess1 should work"
@@ -187,7 +193,7 @@ fn test_init_with_custom_name() {
     run_init_in(
         project.path(),
         home.path(),
-        &["init", "--name", "my-custom-project"],
+        &["init", "my-custom-project"],
     );
 
     let config_path = project.path().join(".tala").join("config.json");
@@ -295,13 +301,13 @@ fn test_agent_to_agent_conversation() {
             "send",
             "--session",
             &session,
-            "--as",
+            "--sender",
             "grubble-agent",
             "Found it, fix pushed",
         ],
     );
 
-    let recap = tala_ok(home.path(), &["recap", &session]);
+    let recap = tala_ok(home.path(), &["history", &session]);
     assert!(
         recap.contains("Bug in grubble"),
         "recap should have first message"
@@ -312,14 +318,14 @@ fn test_agent_to_agent_conversation() {
     );
     assert!(
         recap.contains("grubble-agent"),
-        "recap should attribute --as name"
+        "recap should attribute --sender name"
     );
 
     tala_stop(home.path());
 }
 
 #[test]
-fn test_tala_start_with_message() {
+fn test_send_with_history() {
     let home = tempfile::tempdir().unwrap();
 
     let sess = tala_start(home.path());
@@ -329,8 +335,8 @@ fn test_tala_start_with_message() {
         &["send", "--session", &sess, "Starting message test"],
     );
 
-    let recap = tala_ok(home.path(), &["recap", &sess]);
-    assert!(recap.contains("Starting message test"));
+    let history = tala_ok(home.path(), &["history", &sess]);
+    assert!(history.contains("Starting message test"));
 
     tala_stop(home.path());
 }
@@ -384,11 +390,11 @@ fn test_wait_from_filter() {
 
     tala_ok(
         home.path(),
-        &["send", "--session", &sess, "--as", "alpha", "msg-alpha"],
+        &["send", "--session", &sess, "--sender", "alpha", "msg-alpha"],
     );
     tala_ok(
         home.path(),
-        &["send", "--session", &sess, "--as", "beta", "msg-beta"],
+        &["send", "--session", &sess, "--sender", "beta", "msg-beta"],
     );
 
     let (stdout, _stderr, ok) = tala(
@@ -419,15 +425,15 @@ fn test_wait_limit_cap() {
 
     tala_ok(
         home.path(),
-        &["send", "--session", &sess, "--as", "t", "m1"],
+        &["send", "--session", &sess, "--sender", "t", "m1"],
     );
     tala_ok(
         home.path(),
-        &["send", "--session", &sess, "--as", "t", "m2"],
+        &["send", "--session", &sess, "--sender", "t", "m2"],
     );
     tala_ok(
         home.path(),
-        &["send", "--session", &sess, "--as", "t", "m3"],
+        &["send", "--session", &sess, "--sender", "t", "m3"],
     );
 
     let (stdout, _stderr, ok) = tala(
@@ -461,14 +467,14 @@ fn test_recap_from_filter() {
 
     tala_ok(
         home.path(),
-        &["send", "--session", &sess, "--as", "alpha", "only-alpha"],
+        &["send", "--session", &sess, "--sender", "alpha", "only-alpha"],
     );
     tala_ok(
         home.path(),
-        &["send", "--session", &sess, "--as", "beta", "only-beta"],
+        &["send", "--session", &sess, "--sender", "beta", "only-beta"],
     );
 
-    let (stdout, _stderr, ok) = tala(home.path(), &["recap", &sess, "--json", "--from", "alpha"]);
+    let (stdout, _stderr, ok) = tala(home.path(), &["history", &sess, "--json", "--from", "alpha"]);
     assert!(ok, "recap --from should succeed");
     assert!(stdout.contains("only-alpha"), "should include alpha msg");
     assert!(!stdout.contains("only-beta"), "should exclude beta msg");
@@ -484,7 +490,7 @@ fn test_recap_cursor() {
     tala_ok(home.path(), &["send", "--session", &sess, "old-msg"]);
     tala_ok(home.path(), &["send", "--session", &sess, "new-msg"]);
 
-    let (stdout, _stderr, ok) = tala(home.path(), &["recap", &sess, "--json", "--cursor", "1"]);
+    let (stdout, _stderr, ok) = tala(home.path(), &["history", &sess, "--json", "--since", "1"]);
     assert!(ok, "recap --cursor should succeed");
     assert!(!stdout.contains("old-msg"), "should exclude old-msg");
     assert!(stdout.contains("new-msg"), "should include new-msg");
@@ -501,7 +507,7 @@ fn test_recap_limit_cap() {
     tala_ok(home.path(), &["send", "--session", &sess, "m2"]);
     tala_ok(home.path(), &["send", "--session", &sess, "m3"]);
 
-    let (stdout, _stderr, ok) = tala(home.path(), &["recap", &sess, "--json", "--limit", "2"]);
+    let (stdout, _stderr, ok) = tala(home.path(), &["history", &sess, "--json", "--limit", "2"]);
     assert!(ok, "recap --limit should succeed");
     let count = stdout.matches("\"content\"").count();
     assert_eq!(count, 2, "should cap at 2 messages");
@@ -518,7 +524,7 @@ fn test_recap_limit_zero_is_unlimited() {
     tala_ok(home.path(), &["send", "--session", &sess, "b"]);
     tala_ok(home.path(), &["send", "--session", &sess, "c"]);
 
-    let (stdout, _stderr, ok) = tala(home.path(), &["recap", &sess, "--json", "--limit", "0"]);
+    let (stdout, _stderr, ok) = tala(home.path(), &["history", &sess, "--json", "--limit", "0"]);
     assert!(ok, "recap --limit 0 should succeed");
     let count = stdout.matches("\"content\"").count();
     assert!(
@@ -667,36 +673,6 @@ fn test_watch_after_close() {
 }
 
 #[test]
-fn test_follow_alias_still_works() {
-    let home = tempfile::tempdir().unwrap();
-    let sess = tala_start(home.path());
-
-    tala_ok(home.path(), &["close", &sess]);
-
-    let (stdout, stderr, ok) = tala(
-        home.path(),
-        &[
-            "follow",
-            "--session",
-            &sess,
-            "--since",
-            "0",
-            "--timeout",
-            "3",
-            "--json",
-        ],
-    );
-    assert!(ok, "follow alias should still work after close");
-    assert!(stdout.contains("closed"), "should emit closed event");
-    assert!(
-        stderr.contains("deprecated"),
-        "follow alias should emit deprecation warning"
-    );
-
-    tala_stop(home.path());
-}
-
-#[test]
 fn test_empty_message_rejected() {
     let home = tempfile::tempdir().unwrap();
     let sess = tala_start(home.path());
@@ -751,7 +727,7 @@ fn test_nonexistent_session_recap_fails() {
     let home = tempfile::tempdir().unwrap();
     tala_start(home.path());
 
-    let (_stdout, _stderr, ok) = tala(home.path(), &["recap", "nonexistent"]);
+    let (_stdout, _stderr, ok) = tala(home.path(), &["history", "nonexistent"]);
     assert!(!ok, "recap nonexistent should fail");
 
     tala_stop(home.path());
@@ -784,7 +760,7 @@ fn test_no_wait_flag_instead_of_ff() {
         stdout
     );
 
-    let recap = tala_ok(home.path(), &["recap", &sess]);
+    let recap = tala_ok(home.path(), &["history", &sess]);
     assert!(recap.contains("--no-wait"), "message should be in recap");
 
     tala_stop(home.path());
@@ -806,7 +782,7 @@ fn test_send_short_no_wait() {
         stdout
     );
 
-    let recap = tala_ok(home.path(), &["recap", &sess]);
+    let recap = tala_ok(home.path(), &["history", &sess]);
     assert!(recap.contains("-n short"), "message should be in recap");
 
     tala_stop(home.path());
@@ -832,35 +808,6 @@ fn test_send_quiet_flag() {
 }
 
 #[test]
-fn test_send_file_flag() {
-    let home = tempfile::tempdir().unwrap();
-    let sess = tala_start(home.path());
-
-    let msg_path = home.path().join("msg.txt");
-    std::fs::write(&msg_path, "message from file with **markdown**").unwrap();
-
-    let (stdout, _stderr, ok) = tala(
-        home.path(),
-        &[
-            "send",
-            "--session",
-            &sess,
-            "--file",
-            msg_path.to_str().unwrap(),
-        ],
-    );
-    assert!(ok, "--file should work");
-    assert!(stdout.contains("Sent message"), "should show confirmation");
-
-    let recap = tala_ok(home.path(), &["recap", &sess, "--json"]);
-    assert!(
-        recap.contains("**markdown**"),
-        "file content should be in recap"
-    );
-
-    tala_stop(home.path());
-}
-
 #[test]
 fn test_use_set_and_clear() {
     let home = tempfile::tempdir().unwrap();
@@ -885,7 +832,7 @@ fn test_use_set_and_clear() {
     .then_some(())
     .unwrap();
 
-    let recap = tala_ok(home.path(), &["recap", &sess]);
+    let recap = tala_ok(home.path(), &["history", &sess]);
     assert!(
         recap.contains("active session"),
         "message should be in session"
@@ -973,12 +920,12 @@ fn test_init_name_conflict() {
 }
 
 #[test]
-fn test_start_sets_active_session() {
+fn test_send_sets_active_session() {
     let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
 
     // Start session from project dir — sets active session there
-    let stdout = tala_in(home.path(), Some(project.path()), &["start"]).0;
+    let stdout = tala_in(home.path(), Some(project.path()), &["session", "create"]).0;
     let sess = stdout.lines().next().unwrap_or("").trim().to_string();
     assert!(
         sess.starts_with("sess_"),
@@ -996,7 +943,7 @@ fn test_start_sets_active_session() {
     .then_some(())
     .unwrap();
 
-    let recap = tala_ok(home.path(), &["recap", &sess]);
+    let recap = tala_ok(home.path(), &["history", &sess]);
     assert!(
         recap.contains("message via start"),
         "message should reach session created by start: {}",
@@ -1015,8 +962,8 @@ fn test_send_auto_creates_session() {
         tala_in(home.path(), Some(project.path()), &["send", "auto-created"]);
     assert!(ok, "send without active session should auto-create");
     assert!(
-        stdout.contains("Created session"),
-        "should mention created session: {}",
+        stdout.contains("sess_"),
+        "should contain a session ID: {}",
         stdout
     );
 
@@ -1043,7 +990,7 @@ fn test_send_no_active_session_with_existing_sessions_fails() {
     );
 
     // Verify message was delivered to the single session
-    let recap = tala_ok(home.path(), &["recap", &sess]);
+    let recap = tala_ok(home.path(), &["history", &sess]);
     assert!(
         recap.contains("should auto-target"),
         "recap should contain message from auto-target: {}",
@@ -1102,7 +1049,7 @@ fn test_use_by_name() {
     .2
     .then_some(())
     .unwrap();
-    let recap = tala_ok(home.path(), &["recap", &sess]);
+    let recap = tala_ok(home.path(), &["history", &sess]);
     assert!(
         recap.contains("sent via name"),
         "message should reach the named session"
@@ -1205,11 +1152,11 @@ fn test_listen_streams_all_sessions() {
 
     tala_ok(
         home.path(),
-        &["send", "--session", &sess1, "--as", "alpha", "listen-msg-1"],
+        &["send", "--session", &sess1, "--sender", "alpha", "listen-msg-1"],
     );
     tala_ok(
         home.path(),
-        &["send", "--session", &sess2, "--as", "beta", "listen-msg-2"],
+        &["send", "--session", &sess2, "--sender", "beta", "listen-msg-2"],
     );
 
     std::thread::sleep(std::time::Duration::from_secs(2));
@@ -1246,7 +1193,7 @@ fn test_listen_channel_filter() {
 
     let mut child = std::process::Command::new(tala_bin())
         .env("HOME", home.path())
-        .args(["listen", "--since", "0", "--channel", "help", "--json"])
+        .args(["listen", "--since", "0", "--name", "help", "--json"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -1260,7 +1207,7 @@ fn test_listen_channel_filter() {
             "send",
             "--session",
             &sess,
-            "--as",
+            "--sender",
             "helper",
             "help-request-msg",
         ],
@@ -1274,7 +1221,7 @@ fn test_listen_channel_filter() {
 
     assert!(
         stdout.contains("help-request-msg"),
-        "listen --channel should filter: {}",
+        "listen --name should filter: {}",
         stdout
     );
     assert!(
@@ -1306,7 +1253,7 @@ fn test_listen_from_filter() {
             "send",
             "--session",
             &sess,
-            "--as",
+            "--sender",
             "monitor",
             "monitor-only-msg",
         ],
@@ -1317,7 +1264,7 @@ fn test_listen_from_filter() {
             "send",
             "--session",
             &sess,
-            "--as",
+            "--sender",
             "other",
             "should-be-filtered",
         ],
@@ -1363,7 +1310,7 @@ fn test_listen_match_filter() {
             "send",
             "--session",
             &sess,
-            "--as",
+            "--sender",
             "alert",
             "urgent: production issue",
         ],
@@ -1374,7 +1321,7 @@ fn test_listen_match_filter() {
             "send",
             "--session",
             &sess,
-            "--as",
+            "--sender",
             "chat",
             "just a normal update",
         ],
@@ -1425,7 +1372,7 @@ fn test_send_stdin() {
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success(), "stdin send should succeed");
 
-    let recap = tala_ok(home.path(), &["recap", &sess]);
+    let recap = tala_ok(home.path(), &["history", &sess]);
     assert!(
         recap.contains("piped stdin message"),
         "stdin message should be in recap"
@@ -1451,7 +1398,7 @@ fn test_stream_streams_messages() {
 
     tala_ok(
         home.path(),
-        &["send", "--session", &sess, "--as", "streamer", "live-msg"],
+        &["send", "--session", &sess, "--sender", "streamer", "live-msg"],
     );
 
     std::thread::sleep(std::time::Duration::from_secs(2));
@@ -1604,7 +1551,7 @@ fn test_stdin_flag_piped() {
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success(), "--stdin send should succeed");
 
-    let recap = tala_ok(home.path(), &["recap", &sess]);
+    let recap = tala_ok(home.path(), &["history", &sess]);
     assert!(
         recap.contains("explicit stdin flag message"),
         "stdin message with --stdin flag should be in recap"
@@ -1634,7 +1581,7 @@ fn test_session_reopen() {
         &["send", "--session", &sess, "post-reopen-msg"],
     );
 
-    let recap = tala_ok(home.path(), &["recap", &sess]);
+    let recap = tala_ok(home.path(), &["history", &sess]);
     assert!(
         recap.contains("post-reopen-msg"),
         "recap should show post-reopen message"
@@ -1681,15 +1628,15 @@ fn test_session_reopen_json() {
 }
 
 #[test]
-fn test_start_delivery_indication() {
+fn test_send_with_message() {
     let home = tempfile::tempdir().unwrap();
 
-    let (stdout, _stderr, ok) = tala(home.path(), &["start", "delivery test"]);
-    assert!(ok, "start should succeed");
+    let (stdout, _stderr, ok) = tala(home.path(), &["send", "delivery test"]);
+    assert!(ok, "send should succeed");
 
     assert!(
-        stdout.contains("agents listening"),
-        "start should include delivery indication with agent count: {}",
+        stdout.contains("Sent message"),
+        "send should include confirmation: {}",
         stdout
     );
 
@@ -1721,7 +1668,7 @@ fn test_message_file_flag() {
     );
     assert!(stdout.contains("Sent message"), "should show confirmation");
 
-    let recap = tala_ok(home.path(), &["recap", &sess, "--json"]);
+    let recap = tala_ok(home.path(), &["history", &sess, "--json"]);
     assert!(
         recap.contains("message via --message-file"),
         "file content should be in recap"
@@ -1731,33 +1678,6 @@ fn test_message_file_flag() {
 }
 
 #[test]
-fn test_file_deprecation_warning() {
-    let home = tempfile::tempdir().unwrap();
-    let sess = tala_start(home.path());
-
-    let msg_path = home.path().join("msg.txt");
-    std::fs::write(&msg_path, "deprecated --file").unwrap();
-
-    let (_stdout, stderr, ok) = tala(
-        home.path(),
-        &[
-            "send",
-            "--session",
-            &sess,
-            "--file",
-            msg_path.to_str().unwrap(),
-        ],
-    );
-    assert!(ok, "--file (deprecated) should still work");
-    assert!(
-        stderr.contains("deprecated"),
-        "should emit deprecation warning: {}",
-        stderr
-    );
-
-    tala_stop(home.path());
-}
-
 #[test]
 fn test_close_quiet() {
     let home = tempfile::tempdir().unwrap();

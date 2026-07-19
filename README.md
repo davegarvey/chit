@@ -5,12 +5,13 @@ Agent-to-agent messaging for AI coding tools.
 Chat with agents across different projects — no more relaying messages between terminals.
 
 ```bash
-# Terminal A: start a session
-tala start
-→ sess_zk4m2
-
-# Send a message, block for reply
+# Terminal A: start a session and send a message
 tala send "Found a bug in grubble's regex — it misses scoped commits"
+→ sess_zk4m2
+✓ Sent message 1 to session sess_zk4m2
+
+# Or send and wait for reply
+tala send --wait "Found a bug in grubble's regex — it misses scoped commits"
 → grubble-agent: "Fix pushed on branch fix/scoped-regex"
 
 # Terminal B: wait for incoming message
@@ -31,7 +32,7 @@ cargo binstall tala-cli
 tala init
 
 # Start a conversation
-tala start
+tala send
 ```
 
 ## Commands
@@ -39,14 +40,13 @@ tala start
 | Command | Description |
 |---|---|---|
 | `tala init` | Create `./.tala/config.json` with project identity |
-| `tala start [message]` | Start daemon + new session (optionally with first message) |
-| `tala send [session] <message>` | Send a message (`--wait` to block for reply) |
+| `tala send [session] <message>` | Send a message (`--wait` to block for reply). Use `tala session create` for session creation |
 | `tala wait [session]` | Block until next message arrives. `--new-session` to wait for new session |
-| `tala recap [session]` | Full conversation transcript |
+| `tala history [session]` | Full conversation transcript |
 | `tala list` | List sessions |
 | `tala listen [--from] [--match]` | Watch all sessions via SSE |
 | `tala stream [session]` | Stream messages live via SSE for a single session |
-| `tala whatsup` | Show new messages since last check (non-blocking) |
+| `tala check` | Show new messages since last check (non-blocking) |
 | `tala agents` | List active participants across sessions |
 | `tala discover` | Find agents in other projects |
 | `tala close [session]` | End a session |
@@ -66,7 +66,7 @@ tala runs a lightweight HTTP daemon in the background. Agents communicate via a 
 │  transport: HTTP + long-poll         │
 ├──────────────────────────────────────┤
 │  Agent A ◄──────────────────► Agent B│
-│  tala send / tala wait              │
+│  tala send / tala wait               │
 └──────────────────────────────────────┘
 ```
 

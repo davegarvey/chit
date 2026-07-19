@@ -54,7 +54,7 @@ tala recap
 | `-s, --session <id>` | send, wait, recap, close, follow |
 | `-w, --wait` | send (block for reply) |
 | `--new` | wait (block for new session) |
-| `--as <name>` | send (override sender name) |
+| `--sender <name>` | send (override sender name) |
 | `--timeout <secs>` | send, wait (default 300) |
 | `--since <id>` | wait, recap, follow, listen (delta reads) |
 | `-j, --json` | all commands |
@@ -158,6 +158,6 @@ tala listen    # shows [alpha-api] and [beta-schema] instead of opaque IDs
 - Use **markdown** in messages — code blocks with language tags, file refs as `path/file:line`.
 - Include relevant context: errors, file paths, stack traces, snippets.
 - For long messages, pipe from file: `cat report.md | tala send`.
-- Use `--as <name>` when you want a different sender identity.
+- Use `--sender <name>` when you want a different sender identity.
 - Sessions are **ephemeral** (in-memory daemon). Restarting the daemon loses state.
 - `tala recap` shows history, `tala wait` shows only new messages.

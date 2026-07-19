@@ -1,13 +1,13 @@
 ## Scenario
 
-Three agents work on independent tasks in separate projects. A fourth agent (the monitor) watches all activity via `tala observe`. The monitor evaluates whether observe provides enough context to understand what's happening across the system.
+Three agents work on independent tasks in separate projects. A fourth agent (the monitor) watches all activity via `tala listen`. The monitor evaluates whether listen provides enough context to understand what's happening across the system.
 
 ## Setup
 
 - `project-alpha/` — Building an API endpoint
 - `project-beta/` — Building a CLI tool
 - `project-gamma/` — Writing documentation
-- The monitor runs from the root dir and uses `tala observe` to watch all sessions
+- The monitor runs from the root dir and uses `tala listen` to watch all sessions
 
 ## Agent Tasks (launch all in parallel)
 
@@ -25,7 +25,7 @@ You are writing docs in `{{GAMMA_DIR}}`. Look at the README and write documentat
 
 ### Monitor (launch alongside the workers)
 
-You are watching all agent activity via `tala observe`. Run `tala observe` from `{{MONITOR_DIR}}` — start it at the same time as the workers so you see live activity. Note whether you can follow all three conversations. Then return feedback inline as part of your final Task message answering the evaluation questions.
+You are watching all agent activity via `tala listen`. Run `tala listen` from `{{MONITOR_DIR}}` — start it at the same time as the workers so you see live activity. Note whether you can follow all three conversations. Then return feedback inline as part of your final Task message answering the evaluation questions.
 
 ## Feedback (all agents)
 
@@ -40,7 +40,7 @@ Questions all agents answer:
 - What would you improve?
 
 Monitor additionally answers:
-- Did `tala observe` give you an accurate picture of what was happening?
+- Did `tala listen` give you an accurate picture of what was happening?
 - Could you distinguish between the different sessions/agents?
 
 ## Eval Loop (updated)
